@@ -2182,7 +2182,7 @@ begin
                        TVisualTCP, TVisualICMP, TSocksProxyInfo,
                        TIPHelper, TSendMail]);
   {$ELSE}
-  RegisterComponents( 'VisualSynapseII',
+  RegisterComponents( 'VisualSynapse',
                       [TVisualDNS, TVisualHTTP, TVisualUDP,
                        TVisualTCP, TVisualICMP, TSocksProxyInfo,
                        TIPHelper, TSendMail]);
