@@ -3,7 +3,7 @@ unit httpserver;
 interface
 
 uses Classes, SysUtils, typinfo, blcksock, visualserverbase, inifiles, vstypedef, ExecCGI,
-synacode, synautil, filectrl, mimemess;
+synacode, synautil, filectrl, mimemess;       
 
 // USE AT YOUR OWN RISK //
 // NOT TESTED FOR SECURITY ISSUES //
@@ -31,6 +31,8 @@ synacode, synautil, filectrl, mimemess;
 
 //see rfc 2616
 //http://www.w3.org/Protocols/rfc2616/rfc2616.html
+
+const MAX_POST_DATA_SIZE=8192;
 
 type
 
@@ -195,8 +197,13 @@ type
 
     //internal use:
     FCurrentGetFile: TFileName;
+    FRangeStart: Int64;
+    FRangeEnd: Int64;
     FPostData: String;
     FCGIInfo: TCGIResult;
+
+    FKeepAlive: Boolean;
+
 
     procedure Init; override;
 
@@ -224,6 +231,8 @@ type
     procedure MakeErrorDoc;
     procedure MakeArgs;
     function MergeURL (Path, FileName: String): String;
+    procedure ProcessGetHeadPost(Method: TEnumHTTPProtocols);
+    procedure CheckRanges;
 
   end;
 
@@ -344,7 +353,7 @@ begin
   ListenPort := '80';
 //  DefaultDocument := 'index.*';
   FSettings.FHasCustomVars := True;
-  FHTTPVars.FSupported := [hpHEAD, hpGET{, hpPUT, hpDELETE, hpPOST, hpTRACE}, hpOPTIONS{, hpCONNECT}];
+  FHTTPVars.FSupported := [hpHEAD, hpGET,{ hpPUT, hpDELETE,} hpPOST, hpTRACE, hpOPTIONS{, hpCONNECT}];
   FHTTPVars.FAutomated := FHTTPVars.FSupported + [hpCONNECT];
   FHTTPVars.FCaseSensitive := True;
   FHTTPVars.FVirtualDomains := TList.Create;
@@ -384,6 +393,7 @@ procedure THTTPServer.RegisterCGI(PhysicalDir: TFileName; VirtualDir,
   Domain: String);
 var VD: TVirtualDomain;
 begin
+  PhysicalDir := ExpandUNCFileName(PhysicalDir);
   VD := GetVirtualDomain (Domain);
   VD.FCGI.AddObject (VirtualDir, StrToObj(PhysicalDir));
 end;
@@ -404,6 +414,7 @@ var VD: TVirtualDomain;
 begin
   //todo?
   //check virtualdir for beginning slash
+  PhysicalDir := ExpandUNCFileName(PhysicalDir);
   VD := GetVirtualDomain (Domain);
   if VD.FVirtualPath.IndexOf (VirtualDir) < 0 then
     VD.FVirtualPath.AddObject (VirtualDir, StrToObj(PhysicalDir));
@@ -494,6 +505,7 @@ end;
 
 procedure THTTPServer.RegisterPHP (Binary: TFileName; Extension: String=''; Domain: String='');
 begin
+  Binary := ExpandUNCFileName(Binary);
   if Extension='' then
     Extension := '.php';
   RegisterPreParser (Binary, Extension, Domain, '-f "%s"');
@@ -524,6 +536,7 @@ var Ext: String;
     i: Integer;
     VD: TVirtualDomain;
 begin
+  Result := nil;
   Ext := ExtractFileExt (GetFile (URL));
 //  Compare
   VD := GetVirtualDomain (Domain);
@@ -661,6 +674,21 @@ begin
                 if (FResponse.ResponseCode >= 400) and
                    (FResponse.Data='') then //generate error doc
                   MakeErrorDoc;
+
+
+                FKeepAlive := (FMode=cmDone) and
+                              (FResponse.ResponseCode >= 200) and
+                              (FResponse.ResponseCode < 500) and
+//                              (FRequest.ProtoVersion = 'HTTP/1.1') and
+                              (lowercase(FRequest.Header.Values['Connection']) = 'keep-alive');
+
+                FKeepAlive := False; //sorry, there are bugs currently.
+                              
+                //keep alive conditionals:
+                //the client must request it
+                //it must not be a parsed PHP script
+                //since there is no content-length available.              
+
                 if (FResponse.ResponseCode <> 0) then
                   begin //We send data ourselves:
                     MakeResponseHeaders;
@@ -673,7 +701,7 @@ begin
 //                    if Assigned (FResponse.DataStream) then
 //                      FSock.SendStream (FResponse.DataStream);
                   end;
-                if FResponse.ResponseCode >= 400 then //disconnect
+                if FResponse.ResponseCode >= 500 then //disconnect
                   FMode := cmClose;
               end
             else
@@ -687,10 +715,13 @@ begin
             if (FCurrentGetFile <> '') then
               try
                 FS := TFileStream.Create (FCurrentGetFile, fmOpenRead or fmShareDenyNone);
-                while (FS.Position < FS.Size) and (FSock.LastError=0) do
+                FS.Seek (FRangeStart, soFromBeginning);
+                while (FS.Position < FRangeEnd{FS.Size}) and (FSock.LastError=0) do
                   begin
                     SetLength (Buf, 8192);
-                    i := FS.Read (Buf[1], 8192);
+                    if (FRangeEnd - FS.Position) < 8192 then
+                      SetLength (Buf, FRangeEnd - FS.Position);
+                    i := FS.Read (Buf[1], length (Buf));
                     SetLength (Buf, i);
                     if i>0 then
                       //todo: add bandwidth throttle
@@ -758,9 +789,11 @@ begin
             FPostData := '';
             FRequest.Clear;
             FResponse.Clear;
-            //if keep-alive enabled:
-//            FMode := cmWait;
-            FMode := cmClose;
+
+            if FKeepAlive then
+              FMode := cmWait
+            else
+              FMode := cmClose;
           end;
 
         cmClose:
@@ -806,6 +839,7 @@ begin
       proto :=trim (copy (s,pos(' ',s)+1, maxint)); //protocol
 
       Meta.Add ('PROTOCOL_VERSION='+proto);
+      FRequest.ProtoVersion := proto;
 
       FRequest.Parameter := trim (copy (s,1,pos(' ',s)-1));
 
@@ -905,117 +939,13 @@ begin
 end;
 
 procedure THTTPHandler.ProcessGet;
-var GetFileName,
-    DefDoc,
-    Domain: String;
 begin
-  //if Autonome
-  //Check for manual url
-  //if not, check Preparser
-  //and/or CGI
-
-  //Is GET allowed in the first place?
-  if not (hpGet in FHTTPVars.FSupported) then
-    begin
-      FResponse.ResponseCode := 405; //method not allowed
-      exit;
-    end;
-
-  if (FRequest.Parameter='') or (FRequest.Parameter[1]<>'/') then
-    begin
-      FResponse.ResponseCode := 400; //Bad request
-      exit;
-    end;
-
-  //from here, a callback to client app is possible
-    
-  MakeArgs;
-
-  //Is GET automated:
-  if not (hpGet in FHTTPVars.FAutomated) then
-    begin
-      //Manual.. no server action at all:
-      CallBackRequest (FCallBack.FOnGet)
-    end
-
-  else
-
-    begin //process action:
-
-      //see if this is CGI or PreParser:
-      Domain := FRequest.Header.Values['Host'];
-
-      if not CheckGetHeadPostParser then
-        begin //try to find the file:
-          //Map virtual dir:
-
-          GetFileName := MapVirtualDir ( FRequest.Parameter,
-                                         Domain);
-          if GetFileName='' then //sorry, not found
-            begin
-              FResponse.ResponseCode := 404;
-              exit;
-            end;
-
-          //Check if this is a directory, if so, redirect
-
-          if FRequest.Parameter[Length(FRequest.Parameter)]='/' then
-             //directory request:
-
-             //default document needed
-             begin
-               DefDoc := GetDefaultDoc (GetFileName, Domain);
-               if DefDoc<>'' then
-                 begin //generate redirect
-//                   GetFileName := DefDoc
-                   FResponse.ResponseCode := 301; //Redirect
-                   FResponse.Header.Values['Location'] := MergeURL (FRequest.Parameter, DefDoc);
-                   exit;
-                 end
-               else
-                 begin
-                   //else directory listing
-                   if true {FHTTPVars.FDirListing} then
-                     begin
-                       FResponse.ResponseCode := 200;
-                       FResponse.Data := ListDirAsHTML (GetFileName, GetFile(FRequest.Parameter), Domain);
-                       FResponse.MimeType := 'text/html';
-                       exit;
-                     end
-                   else
-                     begin
-                       //else forbidden
-                       FResponse.ResponseCode := 403; //forbidden
-                       exit;
-                     end;
-                 end
-             end
-          else
-            begin
-
-            end;
-
-
-          CreateFileHeaders (GetFileName); //will generate 404 or appropiate header
-
-          //if file exists (assume readable by server)
-          if FResponse.ResponseCode = 200 then
-            begin
-              //settings for file stream
-              FMode := cmGet;
-              FCurrentGetFile := GetFileName;
-              //accept-ranges:
-//              FRangeStart := 0;
-//              FRangeEnd := 0;
-            end
-          else
-            FMode := cmDone;
-        end;
-    end;
+  ProcessGetHeadPost (hpGET);
 end;
 
 procedure THTTPHandler.ProcessHead;
 begin
+  ProcessGetHeadPost (hpHead);
 
 end;
 
@@ -1063,11 +993,12 @@ end;
 
 procedure THTTPHandler.ProcessPost;
 begin
-
+  ProcessGetHeadPost (hpPOST);
 end;
 
 procedure THTTPHandler.ProcessPut;
 begin
+  //Sorry, not implemented (need authentication support first anyhow)
   FResponse.ResponseCode := 403;
 end;
 
@@ -1107,21 +1038,22 @@ begin
       CGI := GetCGIPath (FRequest.Parameter, Domain);
       if CGI = '' then
         begin
-          FN := MapVirtualDir (FRequest.Parameter);
-          if FN<>'' then
+          FN := MapVirtualDir (FRequest.Parameter, Domain);
+          if (FN<>'') and FileExists (FN) then
             PreParser := GetPreParser (FRequest.Parameter, Domain);
         end;
       if ( (CGI<>'') or (Assigned (PreParser)) ) and
          (FRequest.Command = 'POST') then
         begin
           //Read in POST data
-          ReadPostData;
+
+//          ReadPostData; //this is done before...
         end;
       if CGI<>'' then
         begin
           //DoCGI
           Result := True; //prevent any further parsing
-          if not FileExists (CGI) then
+          if not FileExists (CGI) then  //todo: check case sensivity
             FResponse.ResponseCode := 403 //forbidden, also for browsing
           else
             begin
@@ -1142,8 +1074,8 @@ begin
                   FMode := cmDone;
                 end;
             end;
-        end
-      else
+        end;
+
         if Assigned (PreParser) then
           begin
             Result := True;
@@ -1157,7 +1089,7 @@ begin
                 end
               else
                 begin
-                  FResponse.ResponseCode := 404;
+                  FResponse.ResponseCode := 503; //Service unavailable
                   FMode := cmDone;
                 end;
             
@@ -1253,18 +1185,20 @@ begin
         mimetype := 'application/octet-stream';
       Values ['Content-Type'] := mimetype;
 
+      //range support:
+      Values ['Accept-Ranges'] := 'bytes';
+      FRangeStart := 0;
+      FRangeEnd := sr.Size-1;
     end;
 
   findclose (sr);
 
   //see if there is a modified tag
   if FRequest.Header.Values['If-Modified-Since'] = TimeStamp then //exact match
-    begin
-      FResponse.ResponseCode := 304; //Not modified
-      exit;
-    end;
+    FResponse.ResponseCode := 304 //Not modified
+  else
+    FResponse.ResponseCode := 200;
 
-  FResponse.ResponseCode := 200;
 end;
 
 function THTTPHandler.GetDefaultDoc(Path: TFileName;
@@ -1302,7 +1236,7 @@ begin
 end;
 
 procedure THTTPHandler.ReadPostData;
-const MAX_POST_DATA_SIZE=8192;
+
 var j, l: Integer;
     b: String;
 begin
@@ -1331,11 +1265,19 @@ begin
 end;
 
 procedure THTTPHandler.MakeResponseHeaders;
+var connection: String;
 begin
   with FResponse.Header do
     begin
       Values ['Date'] := RFC822DateTime (now);
       Values ['Server'] := FHTTPVars.FServerName;
+
+      if FKeepAlive then
+        Connection := 'Keep-Alive'
+      else
+        Connection := 'Close';
+      Values ['Connection'] := Connection;
+
 //      if Values ['Content-Type']='' then //some error doc. file transfer should set mimetype
 //        Values ['Content-Type'] := 'text/html';
 //      Values ['Accept-Ranges'] := 'bytes';
@@ -1415,6 +1357,184 @@ begin
   if (FileName<>'') and (FileName[1]='/') then
     Delete (FileName, 1, 1);
   Result := Path + FileName;
+end;
+
+procedure THTTPHandler.ProcessGetHeadPost(Method: TEnumHTTPProtocols);
+var GetFileName,
+    DefDoc,
+    Domain: String;
+begin
+  //if Autonome
+  //Check for manual url
+  //if not, check Preparser
+  //and/or CGI
+
+  //Is GET allowed in the first place?
+  if not (Method in FHTTPVars.FSupported) then
+    begin
+      FResponse.ResponseCode := 405; //method not allowed
+      exit;
+    end;
+
+  if (FRequest.Parameter='') or (FRequest.Parameter[1]<>'/') then
+    begin
+      FResponse.ResponseCode := 400; //Bad request
+      exit;
+    end;
+
+  //from here, a callback to client app is possible
+
+  if Method = hpPOST then
+    ReadPostData;
+
+  MakeArgs;
+
+  //todo: make args on postdata
+
+  //Is GET automated:
+  if not (Method in FHTTPVars.FAutomated) then
+    begin
+      //Manual.. no server action at all:
+      case Method of
+        hpGet: CallBackRequest (FCallBack.FOnGet);
+        hpHead: CallBackRequest (FCallBack.FOnHead);
+        hpPost: CallBackRequest (FCallBack.FOnPost);
+      end;
+    end
+
+  else
+
+    begin //process action:
+
+      //see if this is CGI or PreParser:
+      Domain := FRequest.Header.Values['Host'];
+
+      if not CheckGetHeadPostParser(Domain) then
+        begin //try to find the file:
+          //Map virtual dir:
+
+          GetFileName := MapVirtualDir ( FRequest.Parameter,
+                                         Domain);
+          if GetFileName='' then //sorry, not found
+            begin
+              FResponse.ResponseCode := 404;
+              exit;
+            end;
+
+          //Check if this is a directory, if so, redirect
+
+          if FRequest.Parameter[Length(FRequest.Parameter)]='/' then
+             //directory request:
+
+             //default document needed
+             begin
+               DefDoc := GetDefaultDoc (GetFileName, Domain);
+               if DefDoc<>'' then
+                 begin //generate redirect
+//                   GetFileName := DefDoc
+                   FResponse.ResponseCode := 301; //Redirect
+                   FResponse.Header.Values['Location'] := MergeURL (FRequest.Parameter, DefDoc);
+                   exit;
+                 end
+               else
+                 begin
+                   //else directory listing
+                   if true {FHTTPVars.FDirListing} then
+                     begin
+                       FResponse.ResponseCode := 200;
+                       if Method in [hpGet, hpPost] then //don't delived listing on HEAD
+                         FResponse.Data := ListDirAsHTML (GetFileName, GetFile(FRequest.Parameter), Domain);
+                       FResponse.MimeType := 'text/html';
+                       exit;
+                     end
+                   else
+                     begin
+                       //else forbidden
+                       FResponse.ResponseCode := 403; //forbidden
+                       exit;
+                     end;
+                 end
+             end
+          else
+            begin
+
+            end;
+
+
+          CreateFileHeaders (GetFileName); //will generate 404 or appropiate header
+
+          //if file exists (assume readable by server)
+          if ( (FResponse.ResponseCode = 200))// or
+//               (FResponse.ResponseCode = 206 {Partial content}))
+              and (Method in [hpGet, hpPost]) then
+            begin
+              //settings for file stream
+              FMode := cmGet;
+              FCurrentGetFile := GetFileName;
+
+              CheckRanges;
+
+            end
+          else
+            FMode := cmDone;
+
+        end;
+    end;
+end;
+
+procedure THTTPHandler.CheckRanges;
+var Range,
+    srstart,
+    srend: String;
+    RStart,
+    REnd: Int64;
+begin
+  //see if client request range:
+  Range := FRequest.Header.Values['Range'];
+  //Valid according to rfc 2616 is also:
+  //Range: bytes=1-2,3-4,5-6
+  //we don't support that currently...
+  //Range: bytes=2-3 is supported.
+  if Range<>'' then
+    begin
+      if (lowercase(copy(Range,1,6))<>'bytes=') or
+         (pos (',', Range)>0) then
+        begin
+          FResponse.ResponseCode := 501; //Not implemented
+          exit; //sorry...
+        end;
+      Range := copy (range,7,maxint);
+      srStart := copy (Range, 1, pos ('-', Range)-1);
+      srEnd := copy (Range, pos ('-', Range)+1, maxint);
+      rStart := StrToIntDef (srStart, -1);
+      rEnd := StrToIntDef (srEnd, -1);
+      if ((srStart<>'') and (rStart=-1))
+         or
+         ((srEnd<>'') and (rEnd=-1))
+         or
+         ((srEnd<>'') and (rEnd < rStart)) then
+        begin
+          FResponse.ResponseCode := 400; //Malformed request
+          exit;
+        end;
+      if rStart < FRangeStart then
+        rStart := FRangeStart;
+      if (rEnd=-1) or (rEnd > FRangeEnd) then
+        rEnd := FRangeEnd;
+      FRangeStart := rStart;
+      FRangeEnd := rEnd;
+      FResponse.ResponseCode := 206;
+    end;
+
+  if FResponse.ResponseCode = 206 then
+    begin
+      FResponse.Header.Values['Content-Range'] :=
+        Format ('%d-%d/%s',
+         [FRangeStart, FRangeEnd,
+          FResponse.Header.Values['Content-Length']]);
+      FResponse.Header.Values ['Content-Length'] :=
+        IntToStr (1+FRangeEnd-FRangeStart);
+    end;
 end;
 
 { TVirtualDomain }

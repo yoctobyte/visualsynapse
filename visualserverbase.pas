@@ -30,6 +30,7 @@ type
     Data: String;
     Domain: String;
     FileName: String;
+    ProtoVersion: String;
     Args: TStrings;
     constructor Create;
     procedure Clear;
@@ -389,6 +390,8 @@ begin
               FListenThread.WaitFor;
 
               FreeAndNil(FListenThread);
+
+              FActive := False;
             end;
 
           if Value then
@@ -602,6 +605,7 @@ begin
   Command := '';
   Parameter := '';
   Meta := '';
+  ProtoVersion := '';
   Header.Clear;
   RawHeader.Clear;
 end;

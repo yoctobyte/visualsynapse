@@ -65,6 +65,9 @@ function ExecuteCGI (CGI: TFileName; Params, FileName, Method, Query, Header, Po
         Add ('CONTENT_TYPE='+Request.Header.Values ['Content-Type']);
         Add ('CONTENT_LENGTH='+IntToStr(Length(PostData))); //specifies size of POST data
         Add ('HTTP_ACCEPT='+Request.Header.Values ['Accept']);
+        Add ('HTTP_HOST='+Request.Header.Values ['Host']);
+        if Mode = cmPP then
+          Add ('PHP_SELF='+Request.Parameter);  //shouldn't harm CGI...
 
         // ?? :
         Add ('HTTP_ACCEPT_LANGUAGE='+Request.Header.Values ['Accept-Language']);
@@ -100,6 +103,7 @@ const
   app_spawn: PChar;
 
   lpostdata: Integer;
+  lBuf: Integer;
   headsep: Integer;
 
   label final;
@@ -157,7 +161,7 @@ begin
       if pos ('=', Query)>0 then
         P := ''
       else
-        P := PChar ('"'+Query+'"');
+        P := '"'+StringReplace (Query, ' ', '+', [rfReplaceAll])+'"';
     end
   else //PreParser
     begin
@@ -169,7 +173,7 @@ begin
     end;
 
   //spawn the child process
-  if not (CreateProcess(app_spawn, PChar(P), nil, nil, TRUE,
+  if not (CreateProcess(app_spawn, PChar(app_spawn+' '+P), nil, nil, TRUE,
     CREATE_NEW_CONSOLE {or NORMAL_PRIORITY_CLASS FPriority},
     PChar (Env),
     PChar(ExtractFilePath(app_spawn)), si, pi)) then
@@ -191,6 +195,21 @@ begin
   iBufSize := MaxBufSize;
 
   lpostdata := Length (PostData);
+
+  if Mode = cmCGI then //submit headers to the CGI script (?)
+    begin
+      Buf := Request.RawHeader.Text+#13#10;
+      lBuf := length (Buf);
+      if lBuf>0 then //should be
+        begin
+          WriteFile (write_stdin, Buf[1], lBuf, bytesread, nil);
+          if lBuf <> bytesread then
+            begin
+              Result.ResultCode := 500; //CGI Script misbehaved
+              goto final;
+            end;
+        end;
+    end;
 
   if lpostdata>0 then
     begin
