@@ -2,7 +2,9 @@ unit visualserverbase;
 
 interface
 
-uses windows, classes, sysutils, blcksock, syncobjs, vstypedef, filelogger;
+uses windows, classes, sysutils, syncobjs,
+     blcksock,
+     vstypedef, filelogger, authentication;
 
 var ErrorCodes: Array[0..3] of String =
       ('',
@@ -12,6 +14,27 @@ var ErrorCodes: Array[0..3] of String =
       );
 
 type
+
+  TSettings = record //shared data between component, listen thread and handler
+    FBaseDir:String;
+    FListenPort:String;
+    FListenIP:String;
+    FServerName:String;
+    FThreadSafe:Boolean;
+    FClients:TThreadList;
+    Owner: TComponent;
+    FHasCustomVars:Boolean; //indicate to synchronize to copy component-specific variables
+    FTimeOut: Integer;
+    FLastError: String;
+    FLastErrorCode: Integer;
+    FLogger: TLogger;
+    FDoSSL: Boolean;
+    FSSLCertCAFile: String;
+    FSSLPrivateKeyFile: String;
+    FSSLCertificateFile: String;
+    FAuthentication: TAuthentication;
+  end;
+
   TServerHandler = class;
   TVisualListen = class;
 
@@ -76,7 +99,7 @@ type
   *)
 
   TOnConnect = procedure (Sender: TObject; IPInfo:TIPInfo; var DoContinue:Boolean) of Object;
-  TOnAuthenticate = procedure (Sender: TObject; User, Pass: String; IPInfo:TIPInfo) of Object;
+//  TOnAuthenticate = procedure (Sender: TObject; User, Pass: String; IPInfo:TIPInfo) of Object;
   TOnMustAuthenticate = procedure (Sender: TObject; Request:TRequest; var MustAuthenticate:Boolean; IPInfo:TIPInfo) of Object;
   TOnRequest = procedure (Sender: TObject; Request:TRequest; var Response:TResponse; IPInfo:TIPInfo; var Handled: Boolean) of Object;
   TOnPut = procedure (Sender: TObject; Request:TRequest; var Accepted:Boolean; IPInfo:TIPInfo) of Object;
@@ -199,6 +222,7 @@ type
     property SSLCertCAFile: String read FSettings.FSSLCertCAFile write FSettings.FSSLCertCAFile;
     property SSLPrivateKeyFile: String read FSettings.FSSLPrivateKeyFile write FSettings.FSSLPrivateKeyFile;
     property SSLCertificateFile: String read FSettings.FSSLCertificateFile write FSettings.FSSLCertificateFile;
+    property Authentication: TAuthentication read FSettings.FAuthentication write FSettings.FAuthentication;
 
     //events
     property OnConnect: TOnConnect read FCallBacks.FOnConnect write FCallBacks.FOnConnect;
@@ -294,6 +318,8 @@ begin
   FSettings.FTimeOut := 30000;
   FSettings.FLogger := TLogger.Create (Self);
   FSettings.FLogger.FileName := '';
+  FSettings.FAuthentication := TAuthentication.Create (Self);
+  FSettings.FAuthentication.Method := amSystem;
 end;
 
 destructor TVisualServer.Destroy;
@@ -460,16 +486,24 @@ begin
       FSock.SSLCertCAFile := FSettings.FSSLCertCAFile;
       FSock.SSLPrivateKeyFile := FSettings.FSSLPrivateKeyFile;
       FSock.SSLCertificateFile := FSettings.FSSLCertificateFile;
-      FSock.SSLEnabled := True;
-      if not FSock.SSLAcceptConnection then
-        begin
-          Log (IntToStr (FSock.SSLLastError));
-          Log (FSock.SSLLastErrorDesc);
-          Terminate; //signal handler to close...
-        end;
+      try
+//        FSock.SSLEnabled := True;
+        if not FSock.SSLAcceptConnection then
+          begin
+            Log (IntToStr (FSock.SSLLastError));
+            Log (FSock.SSLLastErrorDesc);
+            Terminate; //signal handler to close...
+          end;
+      except
+        on E:Exception do
+          begin
+            Log (E.Message);
+            Terminate;
+          end;
+      end;
     end;
 
-//  CallBackThreadMethod (OnConnect);
+  CallBackThreadMethod (OnConnect);
 end;
 
 procedure TServerHandler.Final;
@@ -521,9 +555,11 @@ begin
 end;
 
 procedure TServerHandler.OnAuthenticate;
+var m: boolean;
 begin
+  m := false;
   if Assigned (FCallBacks.FOnAuthenticate) then
-    FCallBacks.FOnAuthenticate (FSettings.Owner, FUser, FPass, FIPInfo);
+    FCallBacks.FOnAuthenticate (FSettings.Owner, FUser, FPass, FIPInfo, m);
 end;
 
 procedure TServerHandler.OnConnect;

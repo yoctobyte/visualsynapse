@@ -8,25 +8,25 @@ uses Windows, Classes, SysUtils, visualserverbase;
 const serverversion = 'Visual Telnet Server 0.1';
 
 type
-  TTelnetServer = class (TVisualServer) //basic TCP server
+  TvsTelnetServer = class (TVisualServer) //basic TCP server
     constructor Create (AOwner: TComponent); override;
   end;
 
-  TTelnetHandler = class (TServerHandler)
+  TvsTelnetHandler = class (TServerHandler)
     procedure EchoLastError;
     procedure Handler; override;
   end;
 
 implementation
 
-constructor TTelnetServer.Create(AOwner: TComponent);
+constructor TvsTelnetServer.Create(AOwner: TComponent);
 begin
   inherited;
-  FClientType := TTelnetHandler;
+  FClientType := TvsTelnetHandler;
   FSettings.FListenPort := '23';
 end;
 
-procedure TTelnetHandler.EchoLastError;
+procedure TvsTelnetHandler.EchoLastError;
 var Buf: String;
 begin
                       SetLength (Buf, 1024);
@@ -43,7 +43,7 @@ begin
                       FSock.SendString (#13#10);
 end;
 
-procedure TTelnetHandler.Handler;
+procedure TvsTelnetHandler.Handler;
 var Buf:String;
     User, Pass: String;
     token: THandle;
@@ -82,16 +82,18 @@ begin
                   //FLoggedOn := Authenticate (User, Pass);
 //                  FLoggedOn := True;
                   FLoggedOn :=
-                    LogonUser ( PChar(User),
+                    FSettings.FAuthentication.Authenticate (User, Pass);
+{                    LogonUser ( PChar(User),
                                 nil, //PChar('.'), //nil, //domain
                                 PChar(Pass),
                                 LOGON32_LOGON_INTERACTIVE,  //NETWORK, //BATCH, //
                                 LOGON32_PROVIDER_DEFAULT,
                                 Token
                               );
+}
                   if not FLoggedOn then
                     begin
-//                      FSock.SendString ('Error: '+IntToStr(GetLastError)+#13#10);
+                      FSock.SendString ('Error: '+IntToStr(GetLastError)+#13#10);
 
                     end;
                   if not FLoggedOn then
@@ -147,6 +149,9 @@ begin
           CommandLine := 'c:\winnt\system32\cmd.exe';
           //Launch process as this user:
           FSock.SendString ('Launching command line'#13#10);
+          //sorry, can't get createprocessasuser to work correctly.
+          //may be due to lack of environment?
+          //also, authentication needs option to return token
           CreateProcess{AsUser} ( //Token,
                                 PChar(CommandLine),
                                 nil, //PChar ('/c c:\cygwin\bin\bash.exe'),

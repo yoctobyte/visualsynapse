@@ -22,24 +22,7 @@ type
     RemotePort:String;
   end;
 
-  TSettings = record //shared data between component, listen thread and handler
-    FBaseDir:String;
-    FListenPort:String;
-    FListenIP:String;
-    FServerName:String;
-    FThreadSafe:Boolean;
-    FClients:TThreadList;
-    Owner: TComponent;
-    FHasCustomVars:Boolean; //indicate to synchronize to copy component-specific variables
-    FTimeOut: Integer;
-    FLastError: String;
-    FLastErrorCode: Integer;
-    FLogger: TLogger;
-    FDoSSL: Boolean;
-    FSSLCertCAFile: String;
-    FSSLPrivateKeyFile: String;
-    FSSLCertificateFile: String;
-  end;
+
 
   TString = class
     Value: String;

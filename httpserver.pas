@@ -57,12 +57,12 @@ type
     Params: String;
   end;
 
-  THTTPResponse = class (TResponse)
+  TvsHTTPResponse = class (TResponse)
     procedure FixHeader; override;
   end;
 
 
-  TVirtualDomain = class (TObject)
+  TvsVirtualDomain = class (TObject)
     FDefaultDocument:String;
     FDefaultDocuments:TStrings;
     FHostName:String;
@@ -72,13 +72,14 @@ type
     FPreParser: TStrings; //Array TPreParser;
     FManualURL: TStrings;
     FMimeTypes: TStrings;
+    FAuthNeeded: TStrings;
     constructor Create;
     destructor Destroy; override;
   end;
 
   THTTPVars = record
     FDoVirtualHosts:Boolean;
-    FDomain:TVirtualDomain;
+    FDomain:TvsVirtualDomain;
     FPHPPath:TFileName;
     FCaseSensitive:Boolean;
     FServerName:String;
@@ -117,7 +118,7 @@ type
 
 
   //the component
-  THTTPServer = class (TVisualServer)
+  TvsHTTPServer = class (TVisualServer)
   protected
     FVirtualServers:TList;
     FHTTPVars:THTTPVars;
@@ -125,12 +126,12 @@ type
     FCallBack: TCallBack;
 
     //creates a virtual domain if not exists:
-    function GetVirtualDomain(Domain: String): TVirtualDomain;
+    function GetVirtualDomain(Domain: String): TvsVirtualDomain;
 
   public
     class function ParseDomain(Domain: String): String; //cleans up a domain name
     constructor Create (AOwner:TComponent); override;
-    procedure AddVirtualDomain (Domain:TVirtualDomain);
+    procedure AddVirtualDomain (Domain:TvsVirtualDomain);
     procedure RegisterDir (PhysicalDir: TFileName; VirtualDir: String; Domain: String=''; Recursive: Boolean=True);
     procedure RegisterPreParser (Binary: TFileName; Extension: String; Domain: String=''; Params: String='"%s"');
     procedure RegisterPHP (Binary: TFileName; Extension: String=''; Domain: String='');
@@ -138,6 +139,7 @@ type
     procedure RegisterMimeType (Extension, MimeType: String; Domain: String='');
     procedure RegisterCGI (PhysicalDir: TFileName; VirtualDir: String='/cgi-bin'; Domain: String='');
     procedure RegisterManualURL (URL: String; Domain: String='');
+    procedure RegisterAuthenticationDir (VirtualDir: String; Domain: String=''; Recursive: Boolean=True);
     procedure ClearSettings;
 //    procedure WriteSettings (Stream: TStream);
 //    procedure ReadSettings (Stream: TStream);
@@ -160,11 +162,11 @@ type
   end;
 
   //the protocol handler
-  THTTPHandler = class (TServerHandler)
+  TvsHTTPHandler = class (TServerHandler)
   protected
 
     //Returns NIL on invalid domain:
-    function GetVirtualDomain(Domain: String): TVirtualDomain;
+    function GetVirtualDomain(Domain: String): TvsVirtualDomain;
 
     //support function
     function Compare (V1, V2: String): Boolean; //compares string based on CaseSensitive property
@@ -175,6 +177,8 @@ type
     function IsManualURL (URL: String; Domain: String=''): Boolean;
     function MapVirtualDir (URL: String; Domain: String=''): TFileName;
     function GetDefaultDoc (Path: TFileName; Domain: String=''): String;
+    function IsAuthenticationNeeded (URL: String; Domain: String=''): Boolean;
+    function IsAuthenticated: Boolean;
 
     procedure CreateFileHeaders (FileName: TFileName);
 
@@ -224,6 +228,7 @@ type
 
     //Procedures to split url:
     function GetFile (URL: String): String;
+    function GetFileNoPath (URL: String): String;
     function GetPath (URL: String): String;
     function GetParams (URL: String): String;
     procedure ReadPostData;
@@ -328,28 +333,28 @@ end;
 
 { THTTPServer }
 
-procedure THTTPServer.AddVirtualDomain(Domain: TVirtualDomain);
+procedure TvsHTTPServer.AddVirtualDomain(Domain: TvsVirtualDomain);
 begin
 end;
 
-procedure THTTPServer.ClearSettings;
-var VD: TVirtualDomain;
+procedure TvsHTTPServer.ClearSettings;
+var VD: TvsVirtualDomain;
     i: Integer;
 begin
   //remove list of virtual domains:
   for i:=0 to FHTTPVars.FVirtualDomains.Count - 1 do
-    TVirtualDomain(FHTTPVars.FVirtualDomains[i]).Free;
+    TvsVirtualDomain(FHTTPVars.FVirtualDomains[i]).Free;
   FHTTPVars.FVirtualDomains.Clear;
-  VD := TVirtualDomain.Create;
+  VD := TvsVirtualDomain.Create;
   VD.FHostName := '*';
   FHTTPVars.FVirtualDomains.Add (VD);
 end;
 
-constructor THTTPServer.Create(AOwner: TComponent);
-var VD: TVirtualDomain;
+constructor TvsHTTPServer.Create(AOwner: TComponent);
+var VD: TvsVirtualDomain;
 begin
   inherited;
-  FClientType := THTTPHandler;
+  FClientType := TvsHTTPHandler;
   ListenPort := '80';
 //  DefaultDocument := 'index.*';
   FSettings.FHasCustomVars := True;
@@ -360,15 +365,17 @@ begin
   ClearSettings;
 end;
 
-function THTTPHandler.GetVirtualDomain(Domain: String): TVirtualDomain;
+function TvsHTTPHandler.GetVirtualDomain(Domain: String): TvsVirtualDomain;
+//don't confuse with the THTTPServer.GetVirtualDomain method
+//which is slightly different.
 var i: Integer;
 begin
-  Domain := THTTPServer.ParseDomain(Domain);
+  Domain := TvsHTTPServer.ParseDomain(Domain);
   Result := nil;
   for i:=0 to FHTTPVars.FVirtualDomains.Count - 1 do
-    if TVirtualDomain (FHTTPVars.FVirtualDomains[i]).FHostName = Domain then
+    if TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]).FHostName = Domain then
       begin
-        Result := TVirtualDomain (FHTTPVars.FVirtualDomains[i]);
+        Result := TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]);
         break;
       end;
   {
@@ -381,7 +388,7 @@ begin
   }
 end;
 
-class function THTTPServer.ParseDomain(Domain: String): String;
+class function TvsHTTPServer.ParseDomain(Domain: String): String;
 begin
   Result := lowercase (Domain);
   if Result='' then
@@ -389,26 +396,26 @@ begin
 end;
 
 
-procedure THTTPServer.RegisterCGI(PhysicalDir: TFileName; VirtualDir,
+procedure TvsHTTPServer.RegisterCGI(PhysicalDir: TFileName; VirtualDir,
   Domain: String);
-var VD: TVirtualDomain;
+var VD: TvsVirtualDomain;
 begin
   PhysicalDir := ExpandUNCFileName(PhysicalDir);
   VD := GetVirtualDomain (Domain);
   VD.FCGI.AddObject (VirtualDir, StrToObj(PhysicalDir));
 end;
 
-procedure THTTPServer.RegisterDefaultDoc(FileName, Domain: String);
-var VD: TVirtualDomain;
+procedure TvsHTTPServer.RegisterDefaultDoc(FileName, Domain: String);
+var VD: TvsVirtualDomain;
 begin
   VD := GetVirtualDomain (Domain);
   if VD.FDefaultDocuments.IndexOf (FileName)<0 then
     VD.FDefaultDocuments.Add (FileName);
 end;
 
-procedure THTTPServer.RegisterDir(PhysicalDir: TFileName; VirtualDir,
+procedure TvsHTTPServer.RegisterDir(PhysicalDir: TFileName; VirtualDir,
   Domain: String; Recursive: Boolean);
-var VD: TVirtualDomain;
+var VD: TvsVirtualDomain;
     SR: TSearchRec;
     f: Integer;
 begin
@@ -416,8 +423,14 @@ begin
   //check virtualdir for beginning slash
   PhysicalDir := ExpandUNCFileName(PhysicalDir);
   VD := GetVirtualDomain (Domain);
+  if Recursive then
+    VirtualDir := '+' + VirtualDir
+  else
+    VirtualDir := '-' + VirtualDir;
+
   if VD.FVirtualPath.IndexOf (VirtualDir) < 0 then
     VD.FVirtualPath.AddObject (VirtualDir, StrToObj(PhysicalDir));
+{
   if Recursive then
     begin
       f := FindFirst (PhysicalDir+'\*.*', faDirectory, SR);
@@ -430,18 +443,19 @@ begin
         end;
       FindClose (SR);
     end;
+}    
 end;
 
-procedure THTTPServer.RegisterManualURL(URL, Domain: String);
-var VD: TVirtualDomain;
+procedure TvsHTTPServer.RegisterManualURL(URL, Domain: String);
+var VD: TvsVirtualDomain;
 begin
   VD := GetVirtualDomain (Domain);
   if VD.FManualURL.IndexOf(URL)<0 then
     VD.FManualURL.Add (URL);
 end;
 
-procedure THTTPServer.RegisterMimeType(Extension, MimeType: String; Domain: String='');
-var VD: TVirtualDomain;
+procedure TvsHTTPServer.RegisterMimeType(Extension, MimeType: String; Domain: String='');
+var VD: TvsVirtualDomain;
     i: Integer;
 begin
   VD := GetVirtualDomain (Domain);
@@ -451,9 +465,9 @@ begin
   VD.FMimeTypes.AddObject (Extension, StrToObj (MimeType));
 end;
 
-procedure THTTPServer.RegisterPreParser(Binary: TFileName; Extension: String;
+procedure TvsHTTPServer.RegisterPreParser(Binary: TFileName; Extension: String;
   Domain: String=''; Params: String='"%s"');
-var VD: TVirtualDomain;
+var VD: TvsVirtualDomain;
     i: Integer;
     PreParser: TPreParser;
 begin
@@ -470,7 +484,7 @@ begin
   VD.FPreParser.AddObject (Extension, PreParser);
 end;
 
-procedure THTTPServer.LoadSettings(FileName: TFileName);
+procedure TvsHTTPServer.LoadSettings(FileName: TFileName);
 var FI: TIniFile;
 begin
   if ExtractFilePath (FileName)='' then
@@ -479,10 +493,10 @@ begin
   ClearSettings;
 end;
 
-procedure THTTPServer.SaveSettings(FileName: TFileName);
+procedure TvsHTTPServer.SaveSettings(FileName: TFileName);
 var FI: TIniFile;
     i: Integer;
-    VD: TVirtualDomain;
+    VD: TvsVirtualDomain;
 begin
   //we want fully qualified path:
   if ExtractFilePath (FileName)='' then
@@ -503,7 +517,7 @@ begin
 end;
 
 
-procedure THTTPServer.RegisterPHP (Binary: TFileName; Extension: String=''; Domain: String='');
+procedure TvsHTTPServer.RegisterPHP (Binary: TFileName; Extension: String=''; Domain: String='');
 begin
   Binary := ExpandUNCFileName(Binary);
   if Extension='' then
@@ -511,7 +525,7 @@ begin
   RegisterPreParser (Binary, Extension, Domain, '-f "%s"');
 end;
 
-function THTTPHandler.GetFile(URL: String): String;
+function TvsHTTPHandler.GetFile(URL: String): String;
 var i: Integer;
 begin
   i := pos ('?', URL);
@@ -521,7 +535,7 @@ begin
     Result := URL;
 end;
 
-function THTTPHandler.GetParams(URL: String): String;
+function TvsHTTPHandler.GetParams(URL: String): String;
 var i: Integer;
 begin
   i := pos ('?', URL);
@@ -531,10 +545,10 @@ begin
     Result := '';
 end;
 
-function THTTPHandler.GetPreParser(URL, Domain: String): TPreParser;
+function TvsHTTPHandler.GetPreParser(URL, Domain: String): TPreParser;
 var Ext: String;
     i: Integer;
-    VD: TVirtualDomain;
+    VD: TvsVirtualDomain;
 begin
   Result := nil;
   Ext := ExtractFileExt (GetFile (URL));
@@ -551,9 +565,9 @@ begin
       Result := GetPreParser (URL); //fetch parser of default (''no'') domain.
 end;
 
-function THTTPHandler.GetCGIPath(URL, Domain: String): String;
+function TvsHTTPHandler.GetCGIPath(URL, Domain: String): String;
 var Path: String;
-    VD: TVirtualDomain;
+    VD: TvsVirtualDomain;
     i: Integer;
 begin
   Path := GetPath (URL); //S _should_ (?) be in form /path/ or /full/path/name/
@@ -569,8 +583,8 @@ begin
       Result := GetCGIPath (URL, '');
 end;
 
-function THTTPHandler.IsManualURL(URL, Domain: String): Boolean;
-var VD: TVirtualDomain;
+function TvsHTTPHandler.IsManualURL(URL, Domain: String): Boolean;
+var VD: TvsVirtualDomain;
     i: Integer;
 begin
   VD := GetVirtualDomain (Domain);
@@ -584,7 +598,7 @@ begin
     Result := i >= 0;
 end;
 
-function THTTPHandler.Compare(V1, V2: String): Boolean;
+function TvsHTTPHandler.Compare(V1, V2: String): Boolean;
 begin
   if FHTTPVars.FCaseSensitive then
     Result := V1 = V2
@@ -592,9 +606,10 @@ begin
     Result := AnsiStrComp (PChar(V1), PChar(V2))=0;
 end;
 
-function THTTPHandler.GetPath(URL: String): String;
+function TvsHTTPHandler.GetPath(URL: String): String;
 var s: String;
     i: Integer;
+    p,q: Integer;
 begin
   s := GetFile (URL);
   i := length (s);
@@ -607,43 +622,86 @@ begin
     Result := copy (URL, 1, i)
   else
     Result := '/';
+  //Now filter out dummy paths:
+
+  //strip '/./' directories:
+  Result := StringReplace (Result, '/./', '/', [rfReplaceAll]);
+
+  //strip '/../' directories:
+  while (pos ('/../', Result)) > 0 do
+    begin
+      p := pos ('/../', Result);
+      q := p - 1;
+      while (q>1) and (Result[q] <> '/') do
+        dec (q);
+
+      if (q>=1) and (Result[q] = '/') then
+        begin
+          Delete (Result, q, p - q +3);
+        end
+      else
+        begin
+          Result := ''; //invalid request
+          exit;
+        end;
+    end;
 end;
 
-function THTTPServer.GetVirtualDomain(Domain: String): TVirtualDomain;
+function TvsHTTPServer.GetVirtualDomain(Domain: String): TvsVirtualDomain;
 var i: Integer;
 begin
   Domain := ParseDomain(Domain);
   Result := nil;
   for i:=0 to FHTTPVars.FVirtualDomains.Count - 1 do
-    if TVirtualDomain (FHTTPVars.FVirtualDomains[i]).FHostName = Domain then
+    if TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]).FHostName = Domain then
       begin
-        Result := TVirtualDomain (FHTTPVars.FVirtualDomains[i]);
+        Result := TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]);
         break;
       end;
   //Add one if not yet exist:
   if (not Assigned (Result)) then
     begin //add one
-      Result := TVirtualDomain.Create;
+      Result := TvsVirtualDomain.Create;
       FHTTPVars.FVirtualDomains.Add (Result);
       Result.FHostName := Domain;
     end;
 end;
 
-{ THTTPHandler }
-
-procedure THTTPHandler.CopyCustomVars;
+procedure TvsHTTPServer.RegisterAuthenticationDir(VirtualDir, Domain: String;
+  Recursive: Boolean);
+var r: String;
+    vd : TvsVirtualDomain;
 begin
-  FHTTPVars := THTTPServer(FSettings.Owner).FHTTPVars;
-  FCallBack := THTTPServer(FSettings.Owner).FCallBack;
+  if VirtualDir='' then
+    VirtualDir := '/';
+  vd := GetVirtualDomain (Domain);
+  with VD.FAuthNeeded do
+    begin
+      if Recursive then
+        r := '+'
+      else
+        r := '-';
+      r := r + VirtualDir;
+      if IndexOf (r)<0 then
+        Add (r);
+    end;
 end;
 
-function THTTPHandler.GetGetPath: TFileName;
+{ THTTPHandler }
+
+procedure TvsHTTPHandler.CopyCustomVars;
+begin
+  FHTTPVars := TvsHTTPServer(FSettings.Owner).FHTTPVars;
+  FCallBack := TvsHTTPServer(FSettings.Owner).FCallBack;
+end;
+
+function TvsHTTPHandler.GetGetPath: TFileName;
 begin
   //See if handler fits in some virtual domain
 
 end;
 
-procedure THTTPHandler.Handler; //= Thread.Execute
+procedure TvsHTTPHandler.Handler; //= Thread.Execute
 //some local vars not shared with procedures:
 var FS: TFileStream;
     i: Integer;
@@ -716,11 +774,11 @@ begin
               try
                 FS := TFileStream.Create (FCurrentGetFile, fmOpenRead or fmShareDenyNone);
                 FS.Seek (FRangeStart, soFromBeginning);
-                while (FS.Position < FRangeEnd{FS.Size}) and (FSock.LastError=0) do
+                while (FS.Position <= FRangeEnd{FS.Size}) and (FSock.LastError=0) do
                   begin
                     SetLength (Buf, 8192);
                     if (FRangeEnd - FS.Position) < 8192 then
-                      SetLength (Buf, FRangeEnd - FS.Position);
+                      SetLength (Buf, FRangeEnd - FS.Position + 1);
                     i := FS.Read (Buf[1], length (Buf));
                     SetLength (Buf, i);
                     if i>0 then
@@ -809,7 +867,7 @@ begin
     end;
 end;
 
-procedure THTTPHandler.ProcessRequest (Header: String);
+procedure TvsHTTPHandler.ProcessRequest (Header: String);
 var Buf,s,proto:String;
     Meta:TStrings;
     i:Integer;
@@ -900,14 +958,14 @@ begin
 
 end;
 
-procedure THTTPHandler.ProcessTrace;
+procedure TvsHTTPHandler.ProcessTrace;
 begin
   FResponse.ResponseCode := 200; //Ok, we'll trace
   FResponse.Data := FRequest.RawRequest;
   //that's all folks!
 end;
 
-procedure THTTPHandler.ProcessConnect;
+procedure TvsHTTPHandler.ProcessConnect;
 var v:String;
 begin
   //kindly perform a connect
@@ -932,25 +990,25 @@ begin
     FResponse.ResponseCode := 400; //Bad request
 end;
 
-procedure THTTPHandler.ProcessDelete;
+procedure TvsHTTPHandler.ProcessDelete;
 begin
   //Not implemented yet
   //Forbidden
   FResponse.ResponseCode := 403;
 end;
 
-procedure THTTPHandler.ProcessGet;
+procedure TvsHTTPHandler.ProcessGet;
 begin
   ProcessGetHeadPost (hpGET);
 end;
 
-procedure THTTPHandler.ProcessHead;
+procedure TvsHTTPHandler.ProcessHead;
 begin
   ProcessGetHeadPost (hpHead);
 
 end;
 
-procedure THTTPHandler.ProcessOptions;
+procedure TvsHTTPHandler.ProcessOptions;
 
   function ListOptions: String;
   var i: TEnumHTTPProtocols;
@@ -992,19 +1050,19 @@ begin
     end;
 end;
 
-procedure THTTPHandler.ProcessPost;
+procedure TvsHTTPHandler.ProcessPost;
 begin
   ProcessGetHeadPost (hpPOST);
 end;
 
-procedure THTTPHandler.ProcessPut;
+procedure TvsHTTPHandler.ProcessPut;
 begin
   //Sorry, not implemented (need authentication support first anyhow)
   FResponse.ResponseCode := 403;
 end;
 
 
-function THTTPHandler.CheckGetHeadPostParser (Domain: String): Boolean;
+function TvsHTTPHandler.CheckGetHeadPostParser (Domain: String): Boolean;
 var Manual, CGI, FN: String;
     PreParser: TPreParser;
 begin
@@ -1099,39 +1157,84 @@ begin
     end;
 end;
 
-procedure THTTPHandler.Report404;
+procedure TvsHTTPHandler.Report404;
 begin
   //return error document.
   FResponse.ResponseCode := 404;
 end;
 
-procedure THTTPHandler.Init;
+procedure TvsHTTPHandler.Init;
 begin
-  FResponse := THTTPResponse.Create;
+  FResponse := TvsHTTPResponse.Create;
   inherited;
 end;
 
-function THTTPHandler.MapVirtualDir(URL, Domain: String): TFileName;
+function TvsHTTPHandler.MapVirtualDir(URL, Domain: String): TFileName;
 var Path: String;
-    VD: TVirtualDomain;
+    VD: TvsVirtualDomain;
     i: Integer;
+    vp: String;
+    recursive: Boolean;
+    pathplus: String;
+//if dirmapping starts with '+' recursive mapping is true
+//if starts with '-' or any other character, recursive mapping is false
 begin
   Path := GetPath (URL);
   VD := GetVirtualDomain (Domain);
   if Assigned (VD) then
     begin
       for i:=0 to VD.FVirtualPath.Count - 1 do
-        if Compare (Path, VD.FVirtualPath[i]) then //found
-          begin
-            Result := TString(VD.FVirtualPath.Objects[i]).Value+PathSep+Copy(GetFile(URL), Length(Path)+1, maxint);
-            break;
-          end;
+        begin
+          vp := VD.FVirtualPath[i];
+          recursive := false;
+          if vp<>'' then
+            begin
+              recursive :=  (vp[1]='+');
+              if (vp[1] in ['+', '-']) then
+                delete (vp, 1, 1);
+            end;
+          if not recursive then //exact match needed:
+            begin
+              if Compare (Path, vp{VD.FVirtualPath[i]}) then //found
+                begin
+                  Result := TString(VD.FVirtualPath.Objects[i]).Value+PathSep+Copy(GetFile(URL), Length(Path)+1, maxint);
+                  break;
+                end;
+            end
+          else
+            begin
+              if (copy (path, 1, length(vp))=vp) and //case sensitive
+                 ( (length (path) = length (vp)) or //exact match
+                   (copy (path, length (vp), 1) = '/') //virtual part is substring of path and full dirname matches
+                 ) then
+                begin
+                  //strip the part that is not the virtual path:
+                  pathplus := copy (Path, length (vp)+1, maxint);
+                  //convert to system slashes
+                  pathplus := StringReplace (PathPlus, '/', PathSep, [rfReplaceAll]);
+                  //filename:
+                  pathplus := pathplus + Copy(GetFile(URL), Length(Path)+1, maxint);
+
+                  //some inconsistency exists
+                  if (PathPlus<>'') and (PathPlus[1]=PathSep) then
+                    Delete (PathPlus,1,1);
+
+                  //result is physical path + pathplus:
+                  Result := TString(VD.FVirtualPath.Objects[i]).Value+PathSep+PathPlus;
+
+                  if FileExists (Result) or DirectoryExists (Result) then //okidoki:
+                    break
+                  else
+                    Result := ''; //continue searching virtual domains.
+                end;
+            end;
+        end;
     end;
   if (Result='') and (Domain<>'') then //try default (empty) domain:
     Result := MapVirtualDir (URL);
 end;
 
-procedure THTTPHandler.CreateFileHeaders(FileName: TFileName);
+procedure TvsHTTPHandler.CreateFileHeaders(FileName: TFileName);
 var sr: TSearchRec;
     f: Integer;
     timestamp, mimetype: String;
@@ -1202,9 +1305,9 @@ begin
 
 end;
 
-function THTTPHandler.GetDefaultDoc(Path: TFileName;
+function TvsHTTPHandler.GetDefaultDoc(Path: TFileName;
   Domain: String): String;
-var VD: TVirtualDomain;
+var VD: TvsVirtualDomain;
     i,j: Integer;
     v: String;
 begin
@@ -1223,7 +1326,7 @@ begin
               end;
           if Result='' then //check physical file locations
             begin
-              v := Path+PathSep+VD.FDefaultDocuments[i];
+              v := Path+{PathSep+}VD.FDefaultDocuments[i];
               if FileExists (v) then
                 begin
                   Result := VD.FDefaultDocuments[i];
@@ -1236,7 +1339,7 @@ begin
     Result := GetDefaultDoc(Path);
 end;
 
-procedure THTTPHandler.ReadPostData;
+procedure TvsHTTPHandler.ReadPostData;
 
 var j, l: Integer;
     b: String;
@@ -1265,7 +1368,7 @@ begin
     end;
 end;
 
-procedure THTTPHandler.MakeResponseHeaders;
+procedure TvsHTTPHandler.MakeResponseHeaders;
 var connection: String;
 begin
   with FResponse.Header do
@@ -1285,7 +1388,7 @@ begin
     end;
 end;
 
-procedure THTTPHandler.MakeErrorDoc;
+procedure TvsHTTPHandler.MakeErrorDoc;
 var FN: String;
     S: TStrings;
     ErrMsg: String;
@@ -1330,7 +1433,7 @@ begin
   FResponse.MimeType := 'text/html';
 end;
 
-procedure THTTPHandler.MakeArgs;
+procedure TvsHTTPHandler.MakeArgs;
 var s: String;
     i: Integer;
 begin
@@ -1349,7 +1452,7 @@ begin
   //now Args contains a nice name/value pair if all went ok :)
 end;
 
-function THTTPHandler.MergeURL(Path, FileName: String): String;
+function TvsHTTPHandler.MergeURL(Path, FileName: String): String;
 begin
   if Path = '' then
     Path := '/';
@@ -1360,7 +1463,7 @@ begin
   Result := Path + FileName;
 end;
 
-procedure THTTPHandler.ProcessGetHeadPost(Method: TEnumHTTPProtocols);
+procedure TvsHTTPHandler.ProcessGetHeadPost(Method: TEnumHTTPProtocols);
 var GetFileName,
     DefDoc,
     Domain: String;
@@ -1385,12 +1488,29 @@ begin
 
   //from here, a callback to client app is possible
 
+  //let client post before authentication, we don't care..
+  //note: client to post to 404 file at the moment.. (...)
+  //it is part of valid http request.
+  //if dos is consideration, there are worse methods.
+
   if Method = hpPOST then
     ReadPostData;
 
-  MakeArgs;
-
   //todo: make args on postdata
+  MakeArgs; //makes args for getdata
+
+
+  Domain := FRequest.Header.Values['Host'];
+
+
+  if IsAuthenticationNeeded (FRequest.Parameter, Domain) and not
+     IsAuthenticated (*no params, will know by itself*) then
+    begin
+      FResponse.ResponseCode := 401; //Authentication needed
+      FResponse.Header.Add ('WWW-Authenticate: Basic realm="'+Domain+'"');
+      exit;
+    end;
+
 
   //Is GET automated:
   if not (Method in FHTTPVars.FAutomated) then
@@ -1408,7 +1528,6 @@ begin
     begin //process action:
 
       //see if this is CGI or PreParser:
-      Domain := FRequest.Header.Values['Host'];
 
       if not CheckGetHeadPostParser(Domain) then
         begin //try to find the file:
@@ -1483,7 +1602,7 @@ begin
     end;
 end;
 
-procedure THTTPHandler.CheckRanges;
+procedure TvsHTTPHandler.CheckRanges;
 var Range,
     srstart,
     srend: String;
@@ -1538,9 +1657,109 @@ begin
     end;
 end;
 
+function TvsHTTPHandler.IsAuthenticationNeeded(URL, Domain: String): Boolean;
+var vd: TvsVirtualDomain;
+    i: Integer;
+    vp: String;
+    recursive: Boolean;
+    path: String;
+begin
+  // loop ALL domains
+  // only on positive (authentication needed) break
+  // do not break on mapped directory that does not need authentication
+  VD := GetVirtualDomain (Domain);
+  //clean stuff up
+  Path := GetPath(URL)+GetFileNoPath(URL);
+  Result := False;
+  if Assigned (VD) then
+    begin
+      for i:=0 to VD.FAuthNeeded.Count - 1 do
+        begin
+          vp := VD.FAuthNeeded[i];
+          recursive := false;
+          if vp<>'' then
+            begin
+              recursive :=  (vp[1]='+');
+              if (vp[1] in ['+', '-']) then
+                delete (vp, 1, 1);
+            end;
+          if not recursive then //exact match needed:
+            begin
+              if Compare (Path, vp) then //found
+                begin
+                  Result := True;
+                  break;
+                end;
+            end
+          else
+            begin
+              //in contrary to MapVirtualDir this check does not require existing path
+              //you may well need to authenticate to get a 404 thereafter.
+              //this both allows to authenticate just specific files in stead of directories
+              //but also easifies using wildcards since substrings are allowed.
+              //Note that this only accounts the virtual mappings!
+              //if you map the same physical dir twice, you must set authentication twice.
+
+              if (lowercase(copy (Path, 1, length(vp)))=lowercase(vp)) then //case insensitive
+                begin
+                  Result := True;
+                  Break;
+                end;
+            end;
+        end;
+    end;
+  if (not Result) and (Domain <> '') then
+    Result := IsAuthenticationNeeded (URL);
+end;
+
+function TvsHTTPHandler.GetFileNoPath(URL: String): String;
+var i: Integer;
+begin
+  i := pos ('?', URL);
+  if i>0 then
+    URL := Copy (URL, 1, i-1)
+  else
+    URL := URL;
+  i := length (URL);
+  while i>=1 do
+    begin
+      if URL[i] in ['\', '/'] then
+        begin
+          URL := Copy (URL, i+1, maxint);
+          break;
+        end
+      else
+        dec(i);
+    end;
+  Result := URL;
+end;
+
+function TvsHTTPHandler.IsAuthenticated: Boolean;
+var v: String;
+    up, u, p: String;
+begin
+  Result := False;
+  v := trim (FRequest.Header.Values['Authorization']);
+  if v='' then
+    exit;
+  //we expect 'basic ' here
+  if lowercase(copy(v,1,6))='basic ' then
+    begin
+      up := DecodeBase64(trim(copy(v,7,maxint)));
+      u := copy (up, 1, pos(':', up)-1);
+      p := copy (up, pos(':', up)+1, maxint);
+      if (u<>'') then
+        Result := FSettings.FAuthentication.Authenticate (u,p);
+    end;
+  //sorry, digest not yet supported.
+  //this involves some interaction with the authentication module...
+  //also, this is not yet considered threadsafe..
+
+end;
+
 { TVirtualDomain }
 
-constructor TVirtualDomain.Create;
+constructor TvsVirtualDomain.Create;
 begin
   FDefaultDocument := '';
   FDefaultDocuments := TStringList.Create;
@@ -1550,9 +1769,10 @@ begin
   FPreParser := TStringList.Create;
   FManualURL := TStringList.Create;
   FMimeTypes := TStringList.Create;
+  FAuthNeeded := TStringList.Create;
 end;
 
-destructor TVirtualDomain.Destroy;
+destructor TvsVirtualDomain.Destroy;
 
   procedure FreeWithObj (S: TStrings);
   var i: Integer;
@@ -1565,6 +1785,7 @@ destructor TVirtualDomain.Destroy;
 
 begin
   FDefaultDocuments.Free;
+  FAuthNeeded.Free;
   FreeWithObj (FVirtualPath);
   FreeWithObj (FCGI);
   FreeWithObj (FPreParser);
@@ -1574,7 +1795,7 @@ end;
 
 { THTTPResponse }
 
-procedure THTTPResponse.FixHeader;
+procedure TvsHTTPResponse.FixHeader;
 var i: Integer;
 begin
   if MimeType <> '' then
