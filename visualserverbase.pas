@@ -29,6 +29,7 @@ type
     FLastErrorCode: Integer;
     FLogger: TLogger;
     FDoSSL: Boolean;
+    FAutoTLS: Boolean;
     FSSLCertCAFile: String;
     FSSLPrivateKeyFile: String;
     FSSLCertificateFile: String;
@@ -219,6 +220,7 @@ type
     property ThreadSafe:Boolean read FSettings.FThreadSafe write FSettings.FThreadSafe;
     property LogFile: String read GetLogFile write SetLogFile;
     property SSL: Boolean read GetSSL write SetSSL;
+    property AutoTLS: Boolean read FSettings.FAutoTLS write FSettings.FAutoTLS;
     property SSLCertCAFile: String read FSettings.FSSLCertCAFile write FSettings.FSSLCertCAFile;
     property SSLPrivateKeyFile: String read FSettings.FSSLPrivateKeyFile write FSettings.FSSLPrivateKeyFile;
     property SSLCertificateFile: String read FSettings.FSSLCertificateFile write FSettings.FSSLCertificateFile;
@@ -482,7 +484,13 @@ begin
 
   //Check if SSL is needed
   if FSettings.FDoSSL then
+  //use only for connections in full secure mode.
+  //rfc 2246
     begin
+      //this is supposed to be correct for various protocols
+      //supported:
+      // https (RFC 2818)
+      // FTP over TLS
       FSock.SSLCertCAFile := FSettings.FSSLCertCAFile;
       FSock.SSLPrivateKeyFile := FSettings.FSSLPrivateKeyFile;
       FSock.SSLCertificateFile := FSettings.FSSLCertificateFile;

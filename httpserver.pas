@@ -44,7 +44,7 @@ type
   //cmClose forces connection close
   //cmDone marks all client IO as done, but keeps connection open if enabled
   //cmConnect marks proxy
-  TConnectionMode = (cmWait, cmGET, cmPOST, cmPUT, cmCONNECT, cmReadCGI, cmCLOSE, cmDONE);
+  THttpConnectionMode = (cmWait, cmGET, cmPOST, cmPUT, cmCONNECT, cmReadCGI, cmCLOSE, cmDONE);
 
 
   TCGIPath = class
@@ -192,7 +192,7 @@ type
 
   public
     Buf:String;
-    FMode: TConnectionMode;
+    FMode: THttpConnectionMode;
     FPSock: TTCPBlockSocket;
 
     //vars shared with component:
@@ -1773,15 +1773,6 @@ begin
 end;
 
 destructor TvsVirtualDomain.Destroy;
-
-  procedure FreeWithObj (S: TStrings);
-  var i: Integer;
-  begin
-    for i:= 0 to S.Count - 1 do
-      if Assigned (S.Objects[i]) then
-        S.Objects[i].Free;
-    S.Free;
-  end;
 
 begin
   FDefaultDocuments.Free;

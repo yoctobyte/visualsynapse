@@ -29,6 +29,7 @@ type
   end;
 
 function StrToObj(Value: String): TString;
+procedure FreeWithObj (S: TStrings);
 
 const
 
@@ -86,6 +87,16 @@ begin
   Result := TString.Create;
   Result.Value := Value;
 end;
+
+procedure FreeWithObj (S: TStrings);
+var i: Integer;
+begin
+  for i:= 0 to S.Count - 1 do
+    if Assigned (S.Objects[i]) then
+      S.Objects[i].Free;
+  S.Free;
+end;
+
 
 function MimeTypeFromExtension (Extension: String): String;
 var i: Integer;

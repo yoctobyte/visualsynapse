@@ -2,7 +2,7 @@ unit visualservercomponents;
 
 interface
 
-uses Classes, visualserver, tcpserver, httpserver, smtpserver;
+uses Classes, visualserver, tcpserver, httpserver, ftpserver{, smtpserver};
 
 //registers the components
 
@@ -12,7 +12,7 @@ implementation
 
 procedure Register;
 begin
-  RegisterComponents ('visualsynapse', [TTCPServer, THTTPServer, TSMTPServer]);
+  RegisterComponents ('visualsynapse', [TvsTCPServer, TvsHTTPServer, TvsFTPServer{, TSMTPServer}]);
 end;
 
 end.
