@@ -166,7 +166,10 @@ begin
   else //PreParser
     begin
       try
-        P := Format (Params, [FileName]);
+        //duh, bug in format if there is more than one parameter:
+//        P := Format (Params, [FileName]);
+        P := StringReplace (Params, '%s', Filename, [rfIgnoreCase]);
+        P := StringReplace (P, '%s', '', [rfReplaceAll]);
       except
         P := FileName;
       end;
@@ -233,7 +236,7 @@ begin
       if (bytesread <> 0) then
         begin
 
-          SetLength (Buf, iBufSize);
+          SetLength (Buf, bytesread);
 
           headsep := pos (#13#10#13#10, Buf);
 
@@ -260,6 +263,20 @@ begin
   //        TerminateProcess(pi.hProcess, 0);
 
     until (Exit_Code <> STILL_ACTIVE); //process terminated (normally)
+
+    SetLength (Buf, iBufSize);
+    //see if there is data left in the buffer:
+    PeekNamedPipe(read_stdout, @Buf[1], iBufSize, @bytesread, @avail, nil);
+      //check to see if there is any data to read from stdout
+    if (bytesread <> 0) then
+      begin
+        // there is data. read and let it sent it back to the client
+        Result.hStdOut := read_stdout;
+        Result.pid := pi.hProcess;
+        Result.HasResult := True;
+        Result.ResultCode := 200;
+      end;
+
   finally
   end;
 

@@ -2,7 +2,7 @@ unit visualserverbase;
 
 interface
 
-uses windows, classes, sysutils, blcksock, syncobjs, vstypedef;
+uses windows, classes, sysutils, blcksock, syncobjs, vstypedef, filelogger;
 
 var ErrorCodes: Array[0..3] of String =
       ('',
@@ -97,6 +97,7 @@ type
     FSettings: TSettings;
     FIPInfo: TIPInfo;
     procedure Error (ErrorCode: Integer);
+    procedure Log (Line: String);
     procedure SyncError;
   end;
 
@@ -164,6 +165,11 @@ type
   end;
 
   TVisualServer = class (TComponent)
+  private
+    function GetLogFile: String;
+    procedure SetLogFile(const Value: String);
+    function GetSSL: Boolean;
+    procedure SetSSL(const Value: Boolean);
   protected
     FActive:Boolean;
     FMakeActive:Boolean;
@@ -188,6 +194,12 @@ type
     property ListenPort:String read FSettings.FListenPort write FSettings.FListenPort;
     property ServerName:String read FSettings.FServerName write FSettings.FServerName;
     property ThreadSafe:Boolean read FSettings.FThreadSafe write FSettings.FThreadSafe;
+    property LogFile: String read GetLogFile write SetLogFile;
+    property SSL: Boolean read GetSSL write SetSSL;
+    property SSLCertCAFile: String read FSettings.FSSLCertCAFile write FSettings.FSSLCertCAFile;
+    property SSLPrivateKeyFile: String read FSettings.FSSLPrivateKeyFile write FSettings.FSSLPrivateKeyFile;
+    property SSLCertificateFile: String read FSettings.FSSLCertificateFile write FSettings.FSSLCertificateFile;
+
     //events
     property OnConnect: TOnConnect read FCallBacks.FOnConnect write FCallBacks.FOnConnect;
     property OnAuthenticate: TOnAuthenticate read FCallBacks.FOnAuthenticate write FCallBacks.FOnAuthenticate;
@@ -215,6 +227,7 @@ end;
 
 
 procedure TVisualListen.Execute;
+var Launch: Boolean;
 begin
   //some vars
   with FSettings do
@@ -250,20 +263,23 @@ begin
                 FNewHandler := FHandler.Create (True);
                 FNewHandler.FSock := TTCPBlockSocket.Create;
                 FNewHandler.FSock.Socket := FSock.Accept;
-                FNewHandler.FSettings := FSettings;
-                FNewHandler.FreeOnTerminate := True;
-                if FSettings.FHasCustomVars then
-//                  synchronize (FNewHandler.CopyCustomVars);
-                  //yes, we have some threading issue here
-                  //if component settings gets changed while server is running.
-                  //fix.
-                  FNewHandler.CopyCustomVars;
-                FNewHandler.Resume;
+                  begin
+                    FNewHandler.FSettings := FSettings;
+                    FNewHandler.FreeOnTerminate := True;
+                    if FSettings.FHasCustomVars then
+    //                  synchronize (FNewHandler.CopyCustomVars);
+                      //yes, we have some threading issue here
+                      //if component settings gets changed while server is running.
+                      //fix.
+                      FNewHandler.CopyCustomVars;
+                    FNewHandler.Resume;
+                  end;
               end;
           end
         else
           sleep(20);
       end;
+  FSock.Free;
 end;
 
 
@@ -276,12 +292,15 @@ begin
   FSettings.FClients := TThreadList.Create;
   FSettings.Owner := Self;
   FSettings.FTimeOut := 30000;
+  FSettings.FLogger := TLogger.Create (Self);
+  FSettings.FLogger.FileName := '';
 end;
 
 destructor TVisualServer.Destroy;
 begin
   Active := False;
   FreeAndNil (FSettings.FClients);
+  FSettings.FLogger.Free;
 end;
 
 procedure TVisualServer.DropClient(ConnectionHandle: Integer);
@@ -297,7 +316,7 @@ begin
           end;
     finally
       FSettings.FClients.UnlockList;
-    end;  
+    end;
 end;
 
 procedure TVisualServer.Loaded;
@@ -435,14 +454,30 @@ begin
   if FResponse = nil then
     FResponse := TResponse.Create;
 
-  CallBackThreadMethod (OnConnect);
+  //Check if SSL is needed
+  if FSettings.FDoSSL then
+    begin
+      FSock.SSLCertCAFile := FSettings.FSSLCertCAFile;
+      FSock.SSLPrivateKeyFile := FSettings.FSSLPrivateKeyFile;
+      FSock.SSLCertificateFile := FSettings.FSSLCertificateFile;
+      FSock.SSLEnabled := True;
+      if not FSock.SSLAcceptConnection then
+        begin
+          Log (IntToStr (FSock.SSLLastError));
+          Log (FSock.SSLLastErrorDesc);
+          Terminate; //signal handler to close...
+        end;
+    end;
+
+//  CallBackThreadMethod (OnConnect);
 end;
 
 procedure TServerHandler.Final;
 var i:Integer;
 begin
-  //close socket:
-  FSock.CloseSocket;
+  //close socket
+
+  FSock.CloseSocket; //will free optional SSL socket automatically
 
   //remove self from shared list:
   if Assigned (FSettings.FClients) then
@@ -672,6 +707,11 @@ begin
   //else waiste of synchronize action.
 end;
 
+procedure TVSThread.Log(Line: String);
+begin
+  FSettings.FLogger.Log (Line);
+end;
+
 procedure TVSThread.SyncError;
 begin
   if Assigned (FSettings.Owner) then
@@ -680,6 +720,27 @@ begin
         TVisualServer(FSettings.Owner).OnError (
           FSettings.Owner, FSettings.FLastErrorCode, FSettings.FLastError, FIPInfo);
     except end;
+end;
+
+function TVisualServer.GetLogFile: String;
+begin
+  Result := FSettings.FLogger.FileName;
+end;
+
+procedure TVisualServer.SetLogFile(const Value: String);
+begin
+  FSettings.FLogger.FileName := Value;
+end;
+
+
+function TVisualServer.GetSSL: Boolean;
+begin
+  Result := FSettings.FDoSSL;
+end;
+
+procedure TVisualServer.SetSSL(const Value: Boolean);
+begin
+  FSettings.FDoSSL := Value;
 end;
 
 initialization

@@ -2,7 +2,7 @@ unit vstypedef;
 
 interface
 
-uses Classes, SysUtils;
+uses Classes, SysUtils, FileLogger;
 
 const
   PathSep =
@@ -34,6 +34,11 @@ type
     FTimeOut: Integer;
     FLastError: String;
     FLastErrorCode: Integer;
+    FLogger: TLogger;
+    FDoSSL: Boolean;
+    FSSLCertCAFile: String;
+    FSSLPrivateKeyFile: String;
+    FSSLCertificateFile: String;
   end;
 
   TString = class

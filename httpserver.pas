@@ -303,7 +303,7 @@ var v,w: String;
     sr: TSearchRec;
     f: Integer;
 begin
-  v := 'Index of http://'+HostName+VirtualDir;
+  v := 'Index of //'+HostName+VirtualDir;
   Result := '<html><head><title>'+v+'</title></head>'+
             '<body><h2><i>'+v+'</i></h2><br>'#13#10'<table>'#13#10;
   f := FindFirst (PhysicalDir+'\*.*', faAnyFile, sr);
@@ -313,7 +313,7 @@ begin
       if (sr.Attr and faDirectory)<>0 then
         w := w + '/';
       Result := Result + Format ( '<tr><td><a href="%s">%s</a></td><td>%d</td><td>%s</td></tr>',
-                                  [ 'http://'+HostName+VirtualDir+w,
+                                  [ '//'+HostName+VirtualDir+w,
                                     VirtualDir+w,
                                     sr.Size,
 //                                    RFC822DateTime (FileDateToDateTime(sr.Time))
@@ -728,7 +728,7 @@ begin
                       FSock.SendString (Buf);
                   end;
                 FS.Free;
-                FMode := cmDone;
+                //FMode := cmDone;
               except end;
           end;
 
@@ -800,6 +800,7 @@ begin
           begin
             //close connection
             //and end.
+//            FSock.SSLDoShutdown;
             FSock.CloseSocket;
             Terminate;
           end;
@@ -1149,7 +1150,7 @@ begin
       //Maybe this is a directory, if so, redirect:
       if DirectoryExists (FileName) then
         begin
-          FResponse.ResponseCode := 301; //Redirect
+          FResponse.ResponseCode := 307; //Redirect
           FResponse.Header.Values['Location'] := FRequest.Parameter + '/';
           exit;
         end
