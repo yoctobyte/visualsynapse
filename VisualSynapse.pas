@@ -91,8 +91,22 @@ const MAX_REDIRECT_COUNT = 12;
 
 type //we have to re-type some stuff for the callback methods, else clients
      //have to include corresponding units:
+
+{$IFDEF VER140} //delphi 6 bug. work around.
+  THookReason = THookSocketReason;
+  TSynapseSocket = TSocksBlockSocket;
+{$ELSE}
     THookReason = type THookSocketReason;
     TSynapseSocket = type TSocksBlockSocket;
+{$ENDIF}
+//explanation of this re-typing:
+//if installed component is doubleclicked for some OnEvent
+//and this event has a THookSocketReason
+//user would have to _manually_ add the blcksock unit
+//to his source, which is inconvenient.
+//delphi 6 does not support this. 5 & 7 do.
+
+
 {
 hookreasons are:
     HR_ResolvingBegin,
@@ -173,6 +187,7 @@ hookreasons are:
       FRecvBandwidth:Integer;
       FCS:TCriticalSection;
       FJobCount:Integer;
+      FDummyStrings: TStrings;
       FOnData:TOnVisualData;
       FOnDataStrings:TOnDataStrings;
       FOnError:TOnError;
@@ -666,6 +681,10 @@ type
       //multiples filled per adapter
       FAllIPS:TStrings;
       FAllMasks:TStrings;
+      FDummyStrings: TStrings;
+      FDummyString: String;
+      FDummyInt: Integer;
+      FDummyBool: Boolean;
     public
       procedure Refresh;
       procedure SetString (Value:String); //dummy calls to help the object inspector
@@ -1034,7 +1053,7 @@ end;
 
 procedure TVisualSynapse.SetDummyStrings (Value:TStrings);
 begin
-  //do nothing
+  FDummyStrings := Value;
 end;
 
 function TVisualHTTP.DoHTTP;
@@ -1241,7 +1260,11 @@ end;
 
 procedure TVisualTCP.SendAll (Data:String);  //send to all/first/?
 begin
-  //?
+  //todo:
+  //loop all
+  //for i:=0 to connected.count -1 do
+    //send (data, connected[i].handle)
+  Send (Data, 0);
 end;
 
 procedure TVisualTCP.DisconnectAll;
@@ -1431,7 +1454,7 @@ var D:TDNSRequest;
 begin
   D:=TDNSRequest.Create;
   D.Method := FMethod;
-  D.UseNetBios := FUseNetBIOS;         
+  D.UseNetBios := FUseNetBIOS;
   D.Query := Query;
   D.DNSServer := FDNSServer;
   Enqueue(D);
@@ -2051,22 +2074,22 @@ end;
 
 procedure TIPHelper.SetString;
 begin
-  //ignore
+  FDummyString := Value;
 end;
 
 procedure TIPHelper.SetStrings;
 begin
-  //ignore
+  FDummyStrings := Value;
 end;
 
 procedure TIPHelper.SetInt;
 begin
-  //ignore
+  FDummyInt := Value;
 end;
 
 procedure TIPHelper.SetBool;
 begin
-  //ignore
+  FDummyBool := Value;
 end;
 
 procedure TIPHelper.Refresh;
@@ -2176,17 +2199,26 @@ end;
 
 procedure Register;
 begin
+
+  RegisterComponents( 'VisualSynapse',
+                      [TVisualDNS, TVisualHTTP, TVisualUDP,
+                       TVisualTCP, TVisualICMP, TSocksProxyInfo,
+                       TIPHelper, TSendMail]);
+
+end;
+
+end.
+
+(*
   {$IFDEF OCX}
   RegisterComponents( 'VisualSynapseOCX',
                       [TVisualDNS, TVisualHTTP, TVisualUDP,
                        TVisualTCP, TVisualICMP, TSocksProxyInfo,
                        TIPHelper, TSendMail]);
   {$ELSE}
-  RegisterComponents( 'VisualSynapse',
-                      [TVisualDNS, TVisualHTTP, TVisualUDP,
-                       TVisualTCP, TVisualICMP, TSocksProxyInfo,
-                       TIPHelper, TSendMail]);
   {$ENDIF}
-end;
+*)
 
-end.
+
+
+
