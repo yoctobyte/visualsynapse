@@ -2010,10 +2010,10 @@ begin
                           end;
                       end;
                   end;
+                DNS.Free;
               end;
             SMTPRelay.Free;
             Mime.Free;
-            DNS.Free;
             Job._To.Free;
             Job.AttachedFiles.Free;
             for i:=0 to Job.Attachments.Count - 1 do
