@@ -338,6 +338,7 @@ type
     end;
 
     TSniffingSocket = class (TBlockSocket)
+    public
       FAdapterIP:String;
       procedure CreateSocket;
     end;
@@ -619,8 +620,8 @@ begin
             Buffer,
             l,
             0, //flags
-            @Sai, //we need this filled for the kernel to send.
-            SizeOfVarSin(Sai));
+            Sai);//, //we need this filled for the kernel to send.
+//            SizeOfVarSin(Sai));
 end;
 
 procedure TRawUDPBlockSocket.CreateSocket;
@@ -752,11 +753,13 @@ begin
 
   Result :=
     sendto (FSocket,
-            P[1],
+            @P[1],
             l,
             0, //flags
-            PSockAddr(@FRemoteSin), //we need this filled for the kernel to send.
-            SizeOf(FRemoteSin));
+            FRemoteSin
+            );
+//            PSockAddr(@FRemoteSin), //we need this filled for the kernel to send.
+//            SizeOf(FRemoteSin));
 end;
 
 
@@ -781,7 +784,7 @@ begin
     end;
   SetSin(Sin, FAdapterIP, '0');
 //  Sin.sin_family := IPPROTO_RAW; //AF_UNSPEC;
-  SockCheck(synsock.Bind(FSocket, @Sin, SizeOfVarSin(Sin)));
+  SockCheck(synsock.Bind(FSocket, Sin{, SizeOfVarSin(Sin)}));
   c := 1;
   setsockopt(FSocket, 0{SOL_SOCKET}, IP_HDRINCL, @c, sizeof(c)); //not necessary
   c := 500000;

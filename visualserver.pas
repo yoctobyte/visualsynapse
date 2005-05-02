@@ -12,7 +12,7 @@ implementation
 
 procedure Register;
 begin
-  RegisterComponents ('VisualSynapse', [TTCPServer, THTTPServer, TSMTPServer]);
+  //RegisterComponents ('VisualSynapse', [TTCPServer, TvsHTTPServer, TSMTPServer]);
 end;
 
 end.

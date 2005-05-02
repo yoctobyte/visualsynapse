@@ -2,7 +2,12 @@ unit ExecCGI;
 
 interface
 
-uses Windows, Classes, SysUtils, BlckSock, vstypedef, visualserverbase;
+{$IFDEF FPC}
+  {$MODE DELPHI}
+{$ENDIF}
+
+uses {$IFDEF LINUX}Types, {$ELSE}Windows, {$ENDIF}
+     Classes, SysUtils, BlckSock, vstypedef, visualserverbase;
 
 //Taken a good look at DosCommand unit by Maxime Collomb
 
@@ -30,6 +35,22 @@ implementation
 
 function ExecuteCGI (CGI: TFileName; Params, FileName, Method, Query, Header, PostData: String; IPInfo: TIPInfo; Request: TRequest; Settings: TSettings; Mode: TCGIMode; TimeOut: Integer=30): TCGIResult;
 
+  function GetEnv (Name: String): String;
+  begin
+    {$IFDEF LINUX}
+    Result := GetEnvironmentVariable(Name);
+    {$ELSE}
+    {$IFDEF FPC}
+    Result := GetEnvironmentVariable(Name);
+    {$ELSE}
+    SetLength (Result, 1024);
+    SetLength (Result,
+      GetEnvironmentVariable (PChar(Name), PChar(Result), length(Result))
+    );
+    {$ENDIF}
+    {$ENDIF}
+  end;
+
   function MakeEnvironment (Header, PostData: String; IPInfo: TIPInfo; Script: TFileName; Settings: TSettings): String;
   var Env: TStrings;
       i: Integer;
@@ -53,7 +74,7 @@ function ExecuteCGI (CGI: TFileName; Params, FileName, Method, Query, Header, Po
 //        Add ('SERVER_IP='+Settings.FListenIP);
         Add ('REQUEST_METHOD='+Method);
         Add ('SCRIPT_NAME='+FileName);
-        Add ('SCRIPT_FILENAME='+FileName);
+        Add ('SCRIPT_FILENAME='+FileName);    
         Add ('PATH_INFO=');
         Add ('PATH_TRANSLATED='+FileName);
         Add ('QUERY_STRING='+Query);
@@ -66,6 +87,8 @@ function ExecuteCGI (CGI: TFileName; Params, FileName, Method, Query, Header, Po
         Add ('CONTENT_LENGTH='+IntToStr(Length(PostData))); //specifies size of POST data
         Add ('HTTP_ACCEPT='+Request.Header.Values ['Accept']);
         Add ('HTTP_HOST='+Request.Header.Values ['Host']);
+        //wonder how to parse multiple cookies
+        Add ('HTTP_COOKIE='+Request.Header.Values ['Cookie']);
         if Mode = cmPP then
           Add ('PHP_SELF='+Request.Parameter);  //shouldn't harm CGI...
 
@@ -73,6 +96,14 @@ function ExecuteCGI (CGI: TFileName; Params, FileName, Method, Query, Header, Po
         Add ('HTTP_ACCEPT_LANGUAGE='+Request.Header.Values ['Accept-Language']);
         Add ('HTTP_ACCEPT_ENCODING='+Request.Header.Values ['Accept-Encoding']);
 
+        //system path
+        Add ('PATH='+GetEnv('PATH'));
+        Add ('TEMP='+GetEnv('TEMP'));
+        Add ('TMP='+GetEnv('TEMP'));
+        Add ('windir='+GetEnv('windir'));
+
+        //critical for winsock support (PHP etc):
+        Add ('SystemRoot='+GetEnv('SystemRoot'));
       end;
     Result := StringReplace (Env.Text, #13#10, #0, [rfReplaceAll]) + #0;
     Env.Free;
@@ -86,11 +117,12 @@ const
   var
   Buf: String;
 
-
+  {$IFNDEF LINUX}
   si: STARTUPINFO;
   sa: TSECURITYATTRIBUTES; //security information for pipes
   sd: TSECURITYDESCRIPTOR;
   pi: PROCESS_INFORMATION;
+  {$ENDIF}
 
   newstdin, newstdout, read_stdout, write_stdin: THandle; //pipe handles
   Exit_Code: LongWord; //process exit code
@@ -116,6 +148,7 @@ begin
 
   Env := MakeEnvironment (Header, PostData, IPInfo, FileName, Settings);
 
+  {$IFNDEF LINUX}
   if (Win32Platform = VER_PLATFORM_WIN32_NT) then
     begin //initialize security descriptor (Windows NT)
       InitializeSecurityDescriptor(@sd, SECURITY_DESCRIPTOR_REVISION);
@@ -130,6 +163,8 @@ begin
   sa.nLength := sizeof(SECURITY_ATTRIBUTES);
   sa.bInheritHandle := true; //allow inheritable handles
 
+
+  
   if not (CreatePipe(newstdin, write_stdin, @sa, 0)) then //create stdin pipe
   begin
     exit; //no cleanup here
@@ -142,7 +177,7 @@ begin
     Exit;
   end;
 
-  GetStartupInfo(si); //set startupinfo for the spawned process
+  GetStartupInfo({$IFDEF FPC}@{$ENDIF}si); //set startupinfo for the spawned process
  {The dwFlags member tells CreateProcess how to make the process.
  STARTF_USESTDHANDLES validates the hStd* members. STARTF_USESHOWWINDOW
  validates the wShowWindow member.}
@@ -300,6 +335,8 @@ begin
       Result.ResultCode := 200;
     end;
 
+  {$ENDIF}    
+
 end;
 
 procedure CGISendResultsToSock (CGIResult: TCGIResult; Sock: TTCPBlockSocket);
@@ -311,6 +348,7 @@ begin
   //Read from stdout
   //write to Sock
   //until app finished
+  {$IFNDEF LINUX}
   repeat
     sleep (20);
     GetExitCodeProcess(CGIResult.pid, Exit_Code); //while the process is running
@@ -344,6 +382,7 @@ begin
   //close file handles:
   CloseHandle (CGIResult.hstdout);
   CloseHandle (CGIResult.hstdoutw);
+  {$ENDIF}
 end;
 
 end.

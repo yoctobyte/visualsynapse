@@ -5,6 +5,7 @@ unit authentication;
 interface
 
 {$IFDEF FPC}
+  {$MODE DELPHI}
   {$IFDEF WIN32}
     {$DEFINE WINDOWS}
   {$ELSE}
@@ -39,7 +40,7 @@ interface
 //a call to LogonUser is sufficient.
 
 
-uses Classes, SysUtils, IniFiles, SynaCode,
+uses Classes, SysUtils, IniFiles, synacode,
      {$IFDEF WINDOWS}
      Windows,
      {$ENDIF}
@@ -96,10 +97,12 @@ implementation
 
 function TAuthentication.AddUser(User, Pass: String): Boolean;
 begin
+  Result := False;
   try
     try
       FIni := TIniFile.Create (FPasswordFile);
       FIni.WriteString ('Authenticate', User, EncodeBase64(MD5(Pass)));
+      Result := True;
     finally
       FIni.Free;
     end;
@@ -121,6 +124,7 @@ begin
     amAnonymous: Result := AuthenticateAnonymous;
     amIniFile: Result := AuthenticateIniFile;
     amSystem: Result := AuthenticateSystem;
+    amCallback: Result := AuthenticateCallback;
   else
     Result := False;
   end;

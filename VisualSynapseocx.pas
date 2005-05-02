@@ -1,30 +1,19 @@
-unit VisualSynapse;
+unit VisualSynapseocx;
 //synapse visual components interface unit
 
 
-// by Rene Tegel 2003, 2004, 2005
+// by Rene Tegel 2003
 // non-visual component wrappers around the synapse library
 
 //jan 2004
 //made OCX class prepare
 
-{//$DEFINE SYNAPSE_VER33}
-
-
-//available compiler switches and their meaning
-
-// OCX - (try to) prepare for implementation as OCX.
-
-// BAREOBJECT - if you like to have just a class TObject instead of TComponent
-
-// LINUX - set automatically by Kylix when compiling for linux.
-
-// SYNAPSE_VER33 - there were some changes between synapse version 32 and 33. set appropiately.
+{ $DEFINE OCX}
 
 
 interface
 
-uses {$IFDEF LINUX}
+uses (*{$IFDEF LINUX}
      Libc,
      {$ELSE}
      Windows {sleep function},
@@ -32,7 +21,8 @@ uses {$IFDEF LINUX}
      Classes, sysutils,
      {$IFDEF OCX}
      extctrls,
-     {$ENDIF}
+     {$ENDIF}*)
+     Windows,
      syncobjs,
      dnssend, httpsend, pingsend, slogsend, synautil, blcksock, synsock,
      synamisc, smtpsend, mimemess, mimepart, ftpsend;
@@ -87,26 +77,11 @@ uses {$IFDEF LINUX}
      //issues on the continue:
      //UDP port looses bind... protocols like httpsend and udpsend will recreate socket when needed.
 
-const MAX_REDIRECT_COUNT = 12;
 
 type //we have to re-type some stuff for the callback methods, else clients
      //have to include corresponding units:
-
-{$IFDEF VER140} //delphi 6 bug. work around.
-  THookReason = THookSocketReason;
-  TSynapseSocket = TSocksBlockSocket;
-{$ELSE}
     THookReason = type THookSocketReason;
     TSynapseSocket = type TSocksBlockSocket;
-{$ENDIF}
-//explanation of this re-typing:
-//if installed component is doubleclicked for some OnEvent
-//and this event has a THookSocketReason
-//user would have to _manually_ add the blcksock unit
-//to his source, which is inconvenient.
-//delphi 6 does not support this. 5 & 7 do.
-
-
 {
 hookreasons are:
     HR_ResolvingBegin,
@@ -127,9 +102,6 @@ hookreasons are:
     THostInfo = record
       Host: String;
       Port: String;
-      MetaText: String; // may contain data dependent on protocol
-      MetaData: Pointer; //we leave this nil normally
-      ResultCode : Integer; 
     end;
 
     TSocksInfo = record
@@ -174,7 +146,7 @@ hookreasons are:
          (TComponent)
         {$ENDIF}
       {$ENDIF}
-    *)
+    *)  
     private
       FJobs:TList; //always encapsulate access by critical section FCS
     protected
@@ -189,7 +161,6 @@ hookreasons are:
       FRecvBandwidth:Integer;
       FCS:TCriticalSection;
       FJobCount:Integer;
-      FDummyStrings: TStrings;
       FOnData:TOnVisualData;
       FOnDataStrings:TOnDataStrings;
       FOnError:TOnError;
@@ -302,7 +273,6 @@ hookreasons are:
        IPInterface:String;
        TimeOut:Integer;
        KeepAlive:Boolean;
-       FollowRedirect:Boolean;
      end;
 
      THTTPMethod = (hmGet, hmHead, hmPost);
@@ -329,7 +299,7 @@ hookreasons are:
      public
        function Get (URL:String):Integer; //calls doHTTP
        function Head (URL:String):Integer;
-       function Post (URL, PostData:String):Integer;
+       function Post (URL, Data:String):Integer;
      published
        property Method:THTTPMethod read FMethod write FMethod;
        property URL:String read FURL write GetURL;
@@ -343,7 +313,6 @@ hookreasons are:
        property IPInterface:String read FHTTPInfo.IPInterface write FHTTPInfo.IPInterface;
        property TimeOut:Integer read FHTTPInfo.TimeOut write FHTTPInfo.TimeOut;
        property KeepAlive:Boolean read FHTTPInfo.KeepAlive write FHTTPInfo.KeepAlive;
-       property FollowRedirect: Boolean read FHTTPInfo.FollowRedirect write FHTTPInfo.FollowRedirect;
        property PostData:String read FPostData write FPostData;
 
        property OnHeader:TOnDataStrings read FOnHeader write FOnHeader;
@@ -367,47 +336,31 @@ hookreasons are:
       CloseSocket:Boolean;
     end;
 
-    TUDPResponse = class (TJob)
-      Info: THostInfo;
-      Data: String;
-    end;
-    
-
      TVisualUDP = class (TVisualClient)
      protected
        FActive:Boolean;
-       FDualThreaded: Boolean;
        FRemoteHost:String;
        FRemotePort:String;
        FBindAdapter:String;
        FBindPort:String;
-       FSyncThread: TVisualThread;
      public
        procedure Connect (Host, Port:String);
        procedure SetActive (Value: Boolean);
        procedure Send (Data:String);
        procedure SendTo (Host, Port, Data:String);
        procedure Loaded; override;
-       procedure SetDualThreaded (Value: Boolean);
      published
        property Active:Boolean read FActive write SetActive;
        property Host:String read FRemoteHost write FRemoteHost;
        property Port:String read FRemotePort write FRemotePort;
        property BindPort:String read FBindPort write FBindPort;
        property BindAdapter:String read FBindAdapter write FBindAdapter;
-       property DualThreaded: Boolean read FDualThreaded write SetDualThreaded;
      end;
 
      TUDPThread = class (TVisualThread)
        FSock:TUDPBlockSocket;
        FBindPort:String;
        FBindAdapter:String;
-       procedure Execute; override;
-     end;
-
-     TUDPSyncThread = class (TVisualThread)
-       CS: TCriticalSection;
-       Queue: TList;
        procedure Execute; override;
      end;
 
@@ -464,8 +417,7 @@ hookreasons are:
 }
 
 /// DNS
-     TDNSMethod = (DNS_AUTO, DNS_LOOKUP, DNS_REVERSE, DNS_MX,
-                   DNS_TXT, DNS_ALL);
+     TDNSMethod = (DNS_AUTO, DNS_LOOKUP, DNS_REVERSE, DNS_MX);
 
      TDNSRequest = class (TJob)
        Method:TDNSMethod;
@@ -538,7 +490,6 @@ hookreasons are:
 
      TSendMailRequest = class (TJob)
                           From:String;
-                          ReplyTo: String;
                           _To:TStrings;
                           Subject:String;
                           Mailer:String;
@@ -548,13 +499,11 @@ hookreasons are:
                           Attachments:TList;
                           AutoHTML:Boolean;
                           SMTP:String;
-                          Headers: TStrings;
                         end;
 
      TSendMail = class (TVisualSynapse)
      protected
        FFrom:String;
-       FReplyTo: String;
        FTo:TStrings;
        FSubject:String;
        FMailer:String;
@@ -565,7 +514,6 @@ hookreasons are:
        FAutoHTML:Boolean;
        FSMTP:String;
      public
-       FHeaders: TStrings;
        function getToOne:String;
        procedure setToOne (Value:String);
        procedure SetToList(Value:TStrings);
@@ -581,11 +529,10 @@ hookreasons are:
 //       procedure SendToOne (From:String; _To:String; Subject:String; _Message:String);
        property Attachments:TList read FAttachments;
        constructor Create(AOwner: TComponent); override;
-       destructor Destroy; override;
+       destructor Destroy;
      published
        property AutoHTML:Boolean read FAutoHTML write FAutoHTML;
        property From:String read FFrom write FFrom;
-       property ReplyTo: String read FReplyTo write FReplyTo;
        property ToOne:String read getToOne write setToOne;
        property ToList:TStrings read FTo write setToList;
        property Subject:String read FSubject write FSubject;
@@ -605,6 +552,8 @@ hookreasons are:
 //support function
 function ResolveHostName (IP:String):String;
 
+
+{$IFNDEF LINUX} //ip helper api not supported on windows
 
 const
   MAX_HOSTNAME_LEN               = 128; { from IPTYPES.H }
@@ -664,8 +613,6 @@ type
     LeaseExpires        : Integer;
   end;
 
-  {$IFNDEF LINUX} //ip helper api only supported on windows  
-
   TGetNetworkParams = function (FI : PFixedInfo; var BufLen : Integer) : Integer;
                            stdcall;
 
@@ -673,17 +620,14 @@ type
                           stdcall;
 {$ENDIF}
 
-type
     //ip helper interface
     TIPHelper = class (TComponent)
       //After construction, these strings will be created and filled
       //system wide settings:
     protected
       FIPHelperDLL : THandle;
-      {$IFNDEF LINUX}
       FGetNetworkParams : TGetNetworkParams;
       FGetAdaptersInfo : TGetAdaptersInfo;
-      {$ENDIF}
       FHostName         : String;
       FDomainName       : String;
       FCurrentDNSServer : String;
@@ -708,10 +652,6 @@ type
       //multiples filled per adapter
       FAllIPS:TStrings;
       FAllMasks:TStrings;
-      FDummyStrings: TStrings;
-      FDummyString: String;
-      FDummyInt: Integer;
-      FDummyBool: Boolean;
     public
       procedure Refresh;
       procedure SetString (Value:String); //dummy calls to help the object inspector
@@ -751,9 +691,7 @@ procedure Register;
 
 implementation
 
-//{ $ R VisualSynapse.dcr}
-//{$R *.dcr}
-
+//{ $R VisualSynapse.dcr}
 
 function ResolveHostName (IP:String):String;
 var HE: PHostEnt;
@@ -825,21 +763,10 @@ begin
     if Assigned (Owner.FOnDataStrings) then
       try
         E:=TStringList.Create;
-        //See if there is any data in FDataStrings
-        if FDataStrings.Count > 0 then
-          E.Assign (FDataStrings) //note that we do an extra assign here
-                                   //if client somehow or another frees E,
-                                   //thread will not be affected.
-                                   //it costs some performance, but for safety it is better
-        else
-          // if Data is of reasonable size, fit into FDataStrings
-          // this is a auto conversion that only takes place if there was
-          // no data in FDataStrings
-          begin
-//            if length (FData)<=1024*1024 then // 1Mb max ?
-              E.Text := FData;
-          end;
-
+        E.Assign (FDataStrings); //note that we do an extra assign here
+                                 //if client somehow or another frees E,
+                                 //thread will not be affected.
+                                 //it costs some performance, but for safety it is better
         Owner.FOnDataStrings(Owner, FCurrentJob.Handle, E, FQuery, FInfo);
         E.Free;
       except end;
@@ -961,7 +888,7 @@ begin
   if Self is TVisualUDP then
     FThread := TUDPThread.Create (True);
   if Self is TVisualTCP then
-    FThread := TTCPThread.Create (True);
+    FThread := TTCPThread.Create (True);  
   if Self is TVisualICMP then
     FThread := TICMPThread.Create (True);
   if Self is TSendMail then
@@ -1080,7 +1007,7 @@ end;
 
 procedure TVisualSynapse.SetDummyStrings (Value:TStrings);
 begin
-  FDummyStrings := Value;
+  //do nothing
 end;
 
 function TVisualHTTP.DoHTTP;
@@ -1138,9 +1065,6 @@ end;
 
 procedure THTTPThread.Execute;
 var M:String;
-    SL:TStringList;
-    RedirectCount:Integer;
-    Ok: Boolean;
 begin
   HTTP := THTTPSend.Create;
   while not Terminated do
@@ -1157,14 +1081,7 @@ begin
           HTTP.Document.Size := 0;
           HTTP.Headers.Clear;
           if (Req.Method = hmPost) and (Req.PostData<>'') then
-            begin
-              HTTP.Document.Write (Req.PostData[1], length(Req.PostData));
-              HTTP.MimeType :=  'application/x-www-form-urlencoded';
-              HTTP.Protocol := '1.1';
-              //HTTP.UserAgent := 'Mozilla/5.0 (Windows; U; Windows NT 5.0; en-US; rv:1.7) Gecko/20040614 Firefox/0.8';
-              HTTP.Headers.Add ('Referer: http://www.google.com/translate_t');
-//              HTTP.Headers.Add ('Content-Length: '+IntToStr(HTTP.Document.Size))
-            end;
+            HTTP.Document.Write (Req.PostData[1], length(Req.PostData));
 
           CopySocksInfo (HTTP.Sock);
           HTTP.Sock.MaxSendBandwidth := Req.SendBandwidth;
@@ -1176,13 +1093,12 @@ begin
           HTTP.ProxyUser := Req.HTTPInfo.ProxyUser;
           HTTP.ProxyPass := Req.HTTPInfo.ProxyPass;
           HTTP.IPInterface := Req.HTTPInfo.IPInterface;
-          {$IFDEF SYNAPSE_VER33}
+          {$IFDEF SYNAPSE_VER3.3}
           HTTP.Username := Req.HTTPInfo.UserName;
           HTTP.Password := Req.HTTPInfo.UserPass;
-          {$ELSE} //Version 32 ?
-            //synapse 32 does not support HTTP authentication.
+          {$ELSE} //Version 3.2?
 //          HTTP.Username := Req.HTTPInfo.UserName;
-//          HTTP.Password := Req.HTTPInfo.UserPass;    
+//          HTTP.Password := Req.HTTPInfo.UserPass;
           {$ENDIF}
           HTTP.UserAgent := Req.HTTPInfo.UserAgent;
           HTTP.KeepAlive := Req.HTTPInfo.KeepAlive;
@@ -1192,54 +1108,13 @@ begin
           HTTP.Sock.OnStatus := SockCallBack;
           if HTTP.HTTPMethod (M, Req.URL) then
             begin
-              Ok := True;
-              if Req.HTTPInfo.FollowRedirect then
-                //this does not follow redirects like "meta-equiv" in html documents.
-                //only headers are examined.
-                begin
-                  //see if there is a redirect
-                  RedirectCount := 0;
-                  SL := TStringList.Create;
-
-                  //this is safe, because it leaves lines intact and urls
-                  //are not supposed to have ': ' (whitespace) in it.
-                  SL.Text := StringReplace (HTTP.Headers.Text, ': ', '=', [rfReplaceAll]);
-                  while (SL.IndexOfName ('location')>=0) and
-                        (RedirectCount < MAX_REDIRECT_COUNT) do
-                    begin
-                      //ok then, fetch new document
-                      HTTP.Clear;
-                      if not (HTTP.HTTPMethod (M, SL.Values['location'])) then
-                        begin
-                          break; //sorry//
-                          Ok := False;
-                        end
-                      else
-                        begin
-                          SL.Text := StringReplace (HTTP.Headers.Text, ': ', '=', [rfReplaceAll]);
-                          inc (RedirectCount);
-                        end;
-                    end;
-                  SL.Free;
-                end;
-              if Ok then
-                begin
-                  FInfo.Host := HTTP.TargetHost;
-                  FInfo.Port := HTTP.TargetPort;
-                  FInfo.MetaText := HTTP.Headers.Text;
-                  FInfo.ResultCode := HTTP.ResultCode;
-                  SetLength (FData, HTTP.Document.Size);
-                  if FData<>'' then
-                    HTTP.Document.Read (FData[1], length(FData));
-                  synchronize (SyncOnHeader);
-                  synchronize (SyncOnData);
-                end
-              else
-                begin
-                  FLastError := HTTP.ResultCode;
-                  FErrorMsg := 'Redirected, but failed to fetch document';
-                  synchronize (SyncOnError);
-                end;
+              FInfo.Host := HTTP.TargetHost;
+              FInfo.Port := HTTP.TargetPort;
+              SetLength (FData, HTTP.Document.Size);
+              if FData<>'' then
+                HTTP.Document.Read (FData[1], length(FData));
+              synchronize (SyncOnHeader);
+              synchronize (SyncOnData);
             end
           else
             begin
@@ -1247,7 +1122,7 @@ begin
               FErrorMsg := HTTP.ResultString;
               synchronize (SyncOnError);
             end;
-          Req.Free;
+          Req.Free;  
         end
       else
         sleep (200);
@@ -1294,11 +1169,7 @@ end;
 
 procedure TVisualTCP.SendAll (Data:String);  //send to all/first/?
 begin
-  //todo:
-  //loop all
-  //for i:=0 to connected.count -1 do
-    //send (data, connected[i].handle)
-  Send (Data, 0);
+  //?
 end;
 
 procedure TVisualTCP.DisconnectAll;
@@ -1413,11 +1284,6 @@ begin
       FActive := False;
       SetActive (True);
     end;
-  if FDualThreaded then
-    begin
-      FDualThreaded := False;
-      SetDualThreaded (True);
-    end;
 end;
 
 
@@ -1441,8 +1307,6 @@ end;
 procedure TUDPThread.Execute;
 var U:TUDPRequest;
     F:TUDPRequest;
-    Packet: String;
-    J: TUDPResponse;
 begin
 
   FSock := TUDPBlockSocket.Create;
@@ -1470,32 +1334,17 @@ begin
               FSock.SendString (U.Data);
               //if flasterror = 0 then sync onwritedata else sync onerror
             end;
-          FreeAndNil (U);
-        end;
-//      else
+          U.Free;
+        end
+      else
         begin
-          if FSock.CanRead (0) then
+          if FSock.CanRead (50) then
             begin
-               Packet := FSock.RecvPacket (0);
-               if TVisualUDP(Owner).FDualThreaded then
-                 begin
-                   //put in queue
-                   J := TUDPResponse.Create;
-                   J.Data := Packet;
-                   J.Info.Host := FSock.GetRemoteSinIP;
-                   J.Info.Port := IntToStr(FSock.GetRemoteSinPort);
-                   TUDPSyncThread(TVisualUDP(Owner).FSyncThread).CS.Enter;
-                   TUDPSyncThread(TVisualUDP(Owner).FSyncThread).Queue.Add (J);
-                   TUDPSyncThread(TVisualUDP(Owner).FSyncThread).CS.Leave;
-                 end
-               else
-                 begin //do it now
-                   FData := Packet;
-                   FInfo.Host := FSock.GetRemoteSinIP;
-                   FInfo.Port := IntToStr(FSock.GetRemoteSinPort);
-                   FCurrentJob := F;
-                   synchronize (SyncOnData);
-                 end;
+               FData := FSock.RecvPacket (0);
+               FInfo.Host := FSock.GetRemoteSinIP;
+               FInfo.Port := IntToStr(FSock.GetRemoteSinPort);
+               FCurrentJob := F;
+               synchronize (SyncOnData);
             end
           else //probably not connected
             sleep (50);
@@ -1505,50 +1354,12 @@ begin
   FSock.Free;
 end;
 
-procedure TUDPSyncThread.Execute;
-var Q: TList;
-    i: Integer;
-    J: TUDPResponse;
-begin
-  //if dual-threaded
-  //this thread provides application callback
-  //while the other receives and sends data.
-  Q := TList.Create;
-  while not Terminated do
-    begin
-      CS.Enter;
-      if Queue.Count > 0 then
-        begin
-          for i:=0 to Queue.Count-1 do
-            Q.Add (Queue[i]);
-          Queue.Clear;
-        end;
-      CS.Leave;
-      if Q.Count=0 then
-        sleep (50)
-      else
-        begin
-          //call client
-          for i:=0 to Q.Count - 1 do
-            begin
-              J := TUDPResponse(Q[i]);
-              FInfo := J.Info;
-              FCurrentJob := J;
-              FData := J.Data;
-              synchronize (SyncOnData);
-              J.Free;
-            end;
-          Q.Clear;
-        end;
-    end;
-end;
-
 function TVisualDNS.QueryDNS;
 var D:TDNSRequest;
 begin
   D:=TDNSRequest.Create;
   D.Method := FMethod;
-  D.UseNetBios := FUseNetBIOS;
+  D.UseNetBios := FUseNetBIOS;         
   D.Query := Query;
   D.DNSServer := FDNSServer;
   Enqueue(D);
@@ -1601,21 +1412,16 @@ begin
                 end
               else
                 case qt of
-                  DNS_LOOKUP:  qtype:=QTYPE_A;
+                  DNS_LOOKUP: qtype:=QTYPE_A;
                   DNS_REVERSE: qtype:=QTYPE_PTR;
-                  DNS_MX:      qtype:=QTYPE_MX;
-                  DNS_TXT:     qtype := QTYPE_TXT;
-                  DNS_ALL:     qtype := QTYPE_ALL;
+                  DNS_MX:qtype:=QTYPE_MX;
                 end;
 
               if (DNS.DNSQuery (FQuery, QTYPE, FDataStrings)) and
                  (FDataStrings.Count>0) then
                 begin
                   FData := FDataStrings[0];
-//                  if FDataStrings.Count >= 2 then
-//                    FData := FDataStrings.Text;
                   synchronize (SyncOnData);
-
                   FFound := True;
                   break;
                 end;
@@ -1780,7 +1586,6 @@ begin
   FAttachedFiles := TStringList.Create;
   FAttachments := TList.Create;
   FMailer := 'Visual Synapse';
-  FHeaders := TStringList.Create;
   FMaxThreads := 16;
 end;
 
@@ -1826,7 +1631,6 @@ begin
   //Enqueue job
   Job := TSendMailRequest.Create;
   Job.From := FFrom;
-  Job.ReplyTo := FReplyTo;
   Job.Subject := FSubject;
   Job.TextMessage := FMessage;
   Job.HTMLMessage := FHTML;
@@ -1840,8 +1644,6 @@ begin
   FAttachments := TList.Create;
   Job.AutoHTML := FAutoHTML;
   Job.SMTP := FSMTP;
-  Job.Headers := TStringList.Create;
-  Job.Headers.Assign (FHeaders);
   Enqueue(Job);
 end;
 
@@ -2041,10 +1843,6 @@ begin
             mime.Header.ToList.Assign (Job._To);
             mime.Header.Subject := Job.Subject;
             mime.Header.XMailer := Job.Mailer;
-            mime.Header.CustomHeaders.AddStrings (Job.Headers);
-            if Job.ReplyTo<>'' then
-              mime.Header.CustomHeaders.Add ('Reply-To: '+Job.ReplyTo);
-
 
             Mime.EncodeMessage; //messagepart => mime.lines
 
@@ -2074,11 +1872,6 @@ begin
                     for i:=0 to DNS.Count - 1 do
                       if GetMailServers (DNS[i], sTo, SMTPRelay) then
                         break;
-
-                    //some people forget to specify MX records
-                    //in that case, add plain domain name:
-                    if SMTPRelay.Count = 0 then
-                      SMTPRelay.Add (sTo);
 
                     if Job.SMTP <> '' then
                       SMTPRelay.Insert (0, Job.SMTP);
@@ -2117,10 +1910,10 @@ begin
                           end;
                       end;
                   end;
-                DNS.Free;
               end;
             SMTPRelay.Free;
             Mime.Free;
+            DNS.Free;
             Job._To.Free;
             Job.AttachedFiles.Free;
             for i:=0 to Job.Attachments.Count - 1 do
@@ -2181,22 +1974,22 @@ end;
 
 procedure TIPHelper.SetString;
 begin
-  FDummyString := Value;
+  //ignore
 end;
 
 procedure TIPHelper.SetStrings;
 begin
-  FDummyStrings := Value;
+  //ignore
 end;
 
 procedure TIPHelper.SetInt;
 begin
-  FDummyInt := Value;
+  //ignore
 end;
 
 procedure TIPHelper.SetBool;
 begin
-  FDummyBool := Value;
+  //ignore
 end;
 
 procedure TIPHelper.Refresh;
@@ -2277,9 +2070,6 @@ begin
       if Assigned (NWInfo^.CurrentDNSServer) then
         FCurrentDNSServer := NWInfo^.CurrentDNSServer^.IPAddress;
       AddrToStrings (@NWINfo^.DNSServerList, FDNSServers, nil);
-      if (FCurrentDNSServer='') and
-         (FDNSServers.Count>0) then
-        FCurrentDNSServer := FDNSServers[0];  
       FEnableRouting := boolean (NWInfo^.EnableRouting);
       FEnableProxy := boolean (NWInfo^.EnableProxy);
       FEnableDNS := boolean(NWInfo^.EnableDNS);
@@ -2309,57 +2099,17 @@ end;
 
 procedure Register;
 begin
-
-  RegisterComponents( 'VisualSynapse',
-                      [TVisualDNS, TVisualHTTP, TVisualUDP,
-                       TVisualTCP, TVisualICMP, TSocksProxyInfo,
-                       TIPHelper, TSendMail]);
-
-end;
-
-procedure TVisualUDP.SetDualThreaded(Value: Boolean);
-begin
-  if Value <> FDualThreaded then
-    begin
-      if (csLoading in ComponentState) or
-         (csDesigning in ComponentState) then
-        begin
-          FDualThreaded := Value;
-          Exit;
-        end;
-      if Value then
-        begin
-          FSyncThread := TUDPSyncThread.Create (True);
-          FSyncThread.Owner := Self;
-          TUDPSyncThread(FSyncThread).CS := TCriticalSection.Create;
-          TUDPSyncThread(FSyncThread).Queue := TList.Create;
-          FSyncThread.Resume;
-        end
-      else
-        begin
-          FDualThreaded := False; //signal other threads in advance
-          FSyncThread.Terminate;
-          FSyncThread.WaitFor;
-          TUDPSyncThread(FSyncThread).CS.Free;
-          TUDPSyncThread(FSyncThread).Queue.Free;
-          FSyncThread.Free;
-        end;
-      FDualThreaded := Value;
-    end;
-end;
-
-end.
-
-(*
   {$IFDEF OCX}
   RegisterComponents( 'VisualSynapseOCX',
                       [TVisualDNS, TVisualHTTP, TVisualUDP,
                        TVisualTCP, TVisualICMP, TSocksProxyInfo,
                        TIPHelper, TSendMail]);
   {$ELSE}
+  RegisterComponents( 'VisualSynapseII',
+                      [TVisualDNS, TVisualHTTP, TVisualUDP,
+                       TVisualTCP, TVisualICMP, TSocksProxyInfo,
+                       TIPHelper, TSendMail]);
   {$ENDIF}
-*)
+end;
 
-
-
-
+end.

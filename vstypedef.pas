@@ -37,7 +37,7 @@ const
 // for a more complete list, look here:
 // http://oregonstate.edu/cws/tutorials/faq/mime-types.html
 
-  MaxMimeType = 35;
+  MaxMimeType = 37;
   MimeType: array[0..MaxMimeType, 0..2] of string =
   (
     ('AU', 'audio', 'basic'),
@@ -46,12 +46,14 @@ const
     ('DOC', 'application', 'msword'),
     ('EPS', 'application', 'Postscript'),
     ('GIF', 'image', 'gif'),
+    ('GZ', 'application', 'gzip'),
     ('HTM', 'text', 'html'),
     ('HTML', 'text', 'html'),
     ('JAR', 'application', 'x-java-archive'),
     ('JPEG', 'image', 'jpeg'),
     ('JPG', 'image', 'jpeg'),
     ('JS', 'application', 'x-javascript'),
+    ('LOG', 'text', 'plain'),
     ('MID', 'audio', 'midi'),
     ('MOV', 'video', 'quicktime'),
     ('MPEG', 'video', 'mpeg'),

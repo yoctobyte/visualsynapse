@@ -23,7 +23,7 @@ interface
 //by letting the #13 in instead of #10, and then replace back to CRLF.
 //a simple compiler directive should be sufficient to add mac support.
 
-uses Classes, SysUtils, typinfo, blcksock, visualserverbase, inifiles, vstypedef,
+uses Windows, Classes, SysUtils, typinfo, blcksock, visualserverbase, inifiles, vstypedef,
 synacode, synautil, filectrl;
 
 const PathSeparator = {$IFDEF LINUX} '/' {$ELSE} '\' {$ENDIF};
@@ -49,14 +49,27 @@ type
 
   TFtpConnectionMode = (cmWait, cmLogOn, cmWaitUser, cmWaitPass, cmLoggedOn, cmTransferBusy, cmTimeOut, cmClose);
 
+  TFtpSettings = record
+    FExternalIP: String;
+    FPasvPortMin: Integer;
+    FPasvPortMax: Integer;
+  end;
+
   TvsFTPServer = class (TVisualServer)
   private
   protected
     FDirectories: TStrings;
+    FFtpSettings: TFtpSettings;
   public
     constructor Create (AOwner:TComponent); override;
     destructor Destroy; override;
     function AddHomeDir (Directory: String; User: String=''; ReadOnly: Boolean=True): Boolean;
+    function SaveSettings (FileName: TFileName): Boolean; override;
+    function LoadSettings (FileName: TFileName): Boolean; override;
+  published
+    property ExternalIP:String read FFtpSettings.FExternalIP write FFtpSettings.FExternalIP;
+    property PasvPortMin:Integer read FFtpSettings.FPasvPortMin write FFtpSettings.FPasvPortMin;
+    property PasvPortMax:Integer read FFtpSettings.FPasvPortMax write FFtpSettings.FPasvPortMax;
   end;
 
   TvsFTPData = class;
@@ -79,13 +92,19 @@ type
     FRemoteDataPort: String;
     FRenameFrom: String;
     FModeTLS: Boolean;
-    procedure DoPasv;
+    FFtpSettings: TFtpSettings;
+
+    //support functions:
     function GetHomeDir (User: String): String;
     function GetFullPhysicalDir(Value: String; MustExist: Boolean=True): String;
     function ProcessCommand (cmd, param: String): Boolean;  //returns true if busy
+
+    //FTP command interpretation functions:
+    procedure DoPasv;
     procedure MkDir (value: String);
     procedure RmDir (value: String);
     procedure DelFile (value: String);
+    procedure GetFileSize (value: String);
     procedure UpDir;
     procedure SetType (value: String);
     procedure SetStructure (value: String);
@@ -94,7 +113,7 @@ type
     procedure SetRemoteIPPortEx (value: String);
     procedure ReInitUser;
     procedure ChangeWorkDir (Value: String);
-    procedure ListFiles (Value: String='');
+    procedure ListFiles (Value: String=''; UseControlConnection: Boolean=False);
     procedure NameListFiles (Value: String='');
     procedure SendFile (Value: String);
     procedure PutFile (Value: String; Append: Boolean=False);
@@ -102,6 +121,12 @@ type
     procedure AbortFile;
     procedure RenameFrom (Value: String);
     procedure RenameTo (Value: String);
+    procedure SendHelp (Value: String);
+    procedure SiteInfo;
+    procedure SystInfo;
+    procedure StatDataConnection;
+
+    //data transport functions:
     function  OpenDataConnection: Boolean;
     procedure SendDataString (Value: String);
     procedure SendDataStream (Stream: TStream);
@@ -168,6 +193,52 @@ begin
   Result := True;
 end;
 
+function TvsFTPServer.LoadSettings(FileName: TFileName): Boolean;
+var sl: TStrings;
+    i: Integer;
+    n,v: String;
+    r: Boolean;
+begin
+//  ClearSettings;
+  Result := False;
+  if not InitIniRead(FileName) then
+    exit;
+  ExternalIP := FIni.ReadString ('ftp', 'ExternalIP', '');
+  PasvPortMin := FIni.ReadInteger ('ftp', 'PasvPortMin', 0);
+  PasvPortMax := FIni.ReadInteger ('ftp', 'PasvPortMax', 0);
+  sl := TStringList.Create;
+  FIni.ReadSectionValues ('homedir', sl);
+  for i:=0 to sl.Count - 1 do
+    begin
+      n := sl.Names[i];
+      v := sl.Values[n];
+      if (n<>'') and (v<>'') and (v[1] in ['-', '+']) then
+        begin
+          r := v[1] = '-';
+          Delete (v,1,1);
+          AddHomeDir (v,n,r);
+        end;
+    end;
+
+  Result := True;
+end;
+
+function TvsFTPServer.SaveSettings(FileName: TFileName): Boolean;
+var i: Integer;
+    u,d: String;
+begin
+  Result := False;
+  if not InitIniWrite(FileName) then
+    exit;
+  FIni.WriteString ('ftp', 'ExternalIP', ExternalIP);
+  FIni.WriteInteger ('ftp', 'PasvPortMin', PasvPortMin);
+  FIni.WriteInteger ('ftp', 'PasvPortMax', PasvPortMax);
+  for i:=0 to FDirectories.Count - 1 do
+    FIni.WriteString ('HomeDir', FDirectories[i], TString(FDirectories.Objects[i]).Value);
+  FinishIni;
+  Result := True;
+end;
+
 { TvsFTPHandler }
 
 
@@ -193,6 +264,7 @@ begin
     200: Result := ' Command okay.';
    1200: Result := ' NOOP okay.';
    2200: Result := ' TYPE set to %s';
+   3200: Result := ' %s';
     202: Result := ' Command not implemented, superfluous at this site.';
     211: Result := ' System status, or system help reply.';
     212: Result := ' Directory status.';
@@ -273,18 +345,51 @@ begin
   //Adding users on running ftp server may be risky.
   //You should shutdown ftp server before adding users.
   FDirectories := TvsFTPServer(FSettings.Owner).FDirectories;
+  FFtpSettings := TvsFTPServer(FSettings.Owner).FFtpSettings;
 end;
 
 procedure TvsFTPHandler.DoPasv;
 var ip, ipport: String;
     port: Integer;
+    c,pp, pb, pmin, pmax: Integer;
+    extip: String;
+
 begin
   if Assigned (FPasv) then
     FreeAndNil (FPasv);
   FPasv := TTCPBlockSocket.Create;
   ip := FSock.GetLocalSinIP;
-  FPasv.Bind (ip, '0');
-  FPasv.Listen;
+  //set external ip if appropiate
+
+  with FFtpSettings do
+    if (FExternalIP = '') or
+       (FExternalIP = '0.0.0.0') or
+       (not isIP (FExternalIP)) or
+//       (FSock.GetRemoteSinIP='127.0.0.1') or
+       IsInNetMask (FSock.GetLocalSinIP, FSock.GetRemoteSinIP, '255.255.255.0') //assume class C network
+       //or external ip within netmask
+      then
+      extip := ip
+    else
+      extip := FExternalIP;
+  with FFtpSettings do
+    //bind to first port or port within range if desired:
+    if (FPasvPortMin=0) and (FPasvPortMax=0) then
+      FPasv.Bind (ip, '0')
+    else
+      begin
+        c := 0;
+        pp := FPasvPortMax - FPasvPortMin;
+        if pp<0 then pp := 0;
+        inc (pp);
+        repeat
+          pb := FPasvPortMin + Random (pp);
+          FPasv.Bind (ip, IntToStr(pb));
+          inc (c);
+        until (FPasv.LastError = 0) or (c>200);
+      end;
+  if FPasv.LastError = 0 then
+    FPasv.Listen;
   if FPasv.LastError <> 0 then
     begin
       FreeAndNil (FPasv);
@@ -292,7 +397,7 @@ begin
       exit;
     end;
   port := FPasv.GetLocalSinPort;
-  ipport := StringReplace (ip, '.', ',', [rfReplaceAll]) +
+  ipport := StringReplace (extip, '.', ',', [rfReplaceAll]) +
             ',' +
             IntToStr (port div 256) +
             ',' +
@@ -340,10 +445,10 @@ begin
   if copy (s, 1, length (FHomeDir)) <>
      FHomeDir then
     begin
-      Log ('Error: physical dir outrooted homedir');
-      Log ('Physical dir searched by client: '+s);
-      Log ('Actual Homedir: '+FHomeDir);
-      Log ('Directory requested by client: '+Value);
+      LogError ('Error: physical dir outrooted homedir');
+      LogError ('Physical dir searched by client: '+s);
+      LogError ('Actual Homedir: '+FHomeDir);
+      LogError ('Directory requested by client: '+Value);
       s := FHomeDir;
     end;
 
@@ -390,6 +495,7 @@ begin
 
   while not Terminated do
     begin
+      sleep (200);
       if FMode = cmTransferBusy then
         begin
           cmdTimeOut := 200; //increase response speed
@@ -473,7 +579,10 @@ begin
                 Terminate;
               end;
             cmClose:
-              Terminate;
+              begin
+                Log ('CLOSING');
+                Terminate;
+              end;
             cmWaitUser:
               begin
                 if cl1='user' then
@@ -497,6 +606,7 @@ begin
                    FSettings.FAuthentication.Authenticate (user, pass) then
                   begin
                     FHomeDir := GetHomeDir (User);
+                    Log ('LOGIN "'+user+'" ['+FHomeDir+']');
                     if FHomeDir <> '' then
                       begin
                         Send (230); //okidoki, logged on.
@@ -512,6 +622,7 @@ begin
                     else  //oops, not configured, terminate.
                       begin
                         Send (421); //service unavailable, closing connection
+                        Log ('FAILED_LOGON "'+user+'"');
                         FMode := cmClose;
                         Terminate;
                       end;
@@ -544,12 +655,16 @@ begin
               begin
                 //there is only one command we accept right now
                 if cl1='abor' then
-                  AbortFile
+                  begin
+                    Log ('TRANSFER_ABORTED');
+                    AbortFile;
+                  end
                 else
                   Send (503); //bad sequence of commands.
               end;
           end;  //case
         end;
+      //logged out..
     end;
 end;
 
@@ -609,6 +724,9 @@ begin
   else
   if cmd='dele' then
     DelFile (param)
+  else
+  if cmd='size' then
+    GetFileSize (param)
   else
   if (cmd='cwd') or (cmd='xcwd') then
     ChangeWorkDir (param)
@@ -1009,7 +1127,7 @@ begin
     end;
 end;
 
-procedure TvsFTPHandler.ListFiles (Value: String);
+procedure TvsFTPHandler.ListFiles (Value: String=''; UseControlConnection: Boolean=False);
 var sr: TSearchRec;
     r, n, u: String;
     sl: TStrings;
@@ -1021,6 +1139,11 @@ var sr: TSearchRec;
     y,m,d: Word;
     month: String;
 begin
+  if UseControlConnection and (Value = '') then
+    begin
+      Send (1501, 'STAT needs arguments in this stage');
+      exit;
+    end;
   r := '';
   yn := FormatDateTime ('yyyy', now);
   dir := GetFullPhysicalDir (Value);
@@ -1092,15 +1215,22 @@ begin
       f := FindNext (sr);
     end;
   FindClose (sr);
-  r := sl.Text;
-  sl.Free;
-  Send (150); //about to open data connection
-  if OpenDataConnection then
+  if UseControlConnection then
     begin
-      SendDataString (r);
+      SendMultiLine (211, sl);
     end
   else
-    Send (425); //can't open data connection
+    begin
+      r := sl.Text;
+      Send (150); //about to open data connection
+      if OpenDataConnection then
+        begin
+          SendDataString (r);
+        end
+      else
+        Send (425); //can't open data connection
+    end;
+  sl.Free;
 end;
 
 procedure TvsFTPHandler.NameListFiles(Value: String);
@@ -1155,9 +1285,14 @@ begin
       FPasv.Listen;
       if FPasv.CanRead (20000) then
         begin
-          FPasv.Socket := FPasv.Accept;
-          FDataSock := FPasv;
-          FPasv := nil;
+//          FPasv.Socket := FPasv.Accept;
+//          FDataSock := FPasv;
+//          FPasv := nil;
+
+          FDataSock := TTCPBlockSocket.Create;
+          FDataSock.Socket := FPasv.Accept;
+          FPasv.CloseSocket;
+          FreeAndNil (FPasv);
         end
       else
         FreeAndNil (FPasv); //use it only once (!)
@@ -1235,6 +1370,7 @@ begin
   else
     if FileExists(fn) then
       begin //delete file
+        Log ('DELETEFILE "'+value+'" ['+fn+']');
         if DeleteFile (fn) then
           Send (250)
         else
@@ -1242,6 +1378,7 @@ begin
       end
     else if DirectoryExists (fn) then
       begin
+        Log ('REMOVEDIR "'+value+'" ['+fn+']');
         if RemoveDir (fn) then
           Send (250)
         else
@@ -1260,15 +1397,21 @@ end;
 procedure TvsFTPHandler.PutFile(Value: String; Append: Boolean=False);
 //store file on server
 var fs: TFileStream;
+    orig: String;
 begin
   if FReadOnly then
     begin
       Send (550); //sorry
       exit;
     end;
+  orig := Value;
   Value := GetFullPhysicalDir(Value);
   if (Value<>'') then
     begin
+      if Append then
+        Log ('APPE "'+Orig+'" ['+Value+']')
+      else
+        Log ('STOR "'+Orig+'" ['+Value+']');
       try
         if FileExists (Value) then //beware not to overwrite existing file
                                    //if transfer cannot be initiated.
@@ -1277,7 +1420,7 @@ begin
           fs := TFileStream.Create (Value, fmCreate); //create or overwrite
       except
         try
-          fs.Free;
+          //fs.Free;
         except end;
         fs := nil;
       end;
@@ -1301,10 +1444,13 @@ end;
 
 procedure TvsFTPHandler.SendFile(Value: String);
 var fs: TFileStream;
+    orig: String;
 begin
+  Orig := Value;
   Value := GetFullPhysicalDir (Value);
   if (Value<>'') and FileExists (Value) then
     begin
+      Log ('RETR "'+Orig+'" ['+Value+']');
       try
         fs := TFileStream.Create (Value, fmOpenRead or fmShareDenyNone);
       except
@@ -1390,7 +1536,10 @@ begin
             begin
               if not FileExists (w) and
                  RenameFile (v, w) then
-                Send (250)
+                begin
+                  Log ('RENAMEFILE "'+v+'" to "'+w+'"');
+                  Send (250);
+                end
               else
                 Send (450);
             end
@@ -1398,7 +1547,10 @@ begin
             begin
               if not DirectoryExists (w) and
                  RenameFile (v,w) then //some os may support to do a move.
-                Send (250)
+                begin
+                  Log ('RENAMEDIR "'+v+'" to "'+w+'"');
+                  Send (250)
+                end
               else
                 Send (450);
             end
@@ -1426,6 +1578,67 @@ begin
     Send (504); //
 end;
 
+procedure TvsFTPHandler.SendHelp(Value: String);
+begin
+
+end;
+
+procedure TvsFTPHandler.SiteInfo;
+begin
+
+end;
+
+procedure TvsFTPHandler.StatDataConnection;
+var v: String;
+begin
+try
+  if Assigned (FData) then
+    begin
+      if Assigned (FData.FDataStream) then
+        begin
+ //         p := FData.FStream.Position;
+//          s := FData.FStream.Size;
+        end;
+  //    if FData.FDataMethod in [dmSendStream, dmSendAsciiStream] then
+        begin
+        //  v :=
+
+        end;
+    end;
+except
+  Send (500);
+end;
+end;
+
+procedure TvsFTPHandler.SystInfo;
+begin
+  //this implementation is not correct
+  //however, rfc 1700 doesn't list windows.
+  //somebody point me to a Assigned Numbers document
+  //containing windows ?
+
+  {$IFDEF WINDOWS}
+  Send (215, 'Windows');
+  {$ELSE}
+  Send (215, 'Linux');
+  {$ENDIF}
+end;
+
+procedure TvsFTPHandler.GetFileSize(value: String);
+var fn: String;
+    sr: TSearchRec;
+begin
+  fn := GetFullPhysicalDir (value);
+  if FileExists (fn) then
+    begin
+      FindFirst (fn, faAnyFile, sr);
+      Send (3200, IntToStr(sr.Size));
+      FindClose (sr);
+    end
+  else
+    Send (450);
+end;
+
 { TvsFTPData }
 
 procedure TvsFTPData.Execute;
@@ -1440,11 +1653,12 @@ begin
         //implementing abort not very meaningfull, but in fact todo..
         FDataSock.SendString (FDataBuffer);
       end;
-    dmStreamSend, dmAsciiStreamSend:
+    dmStreamSend, dmAsciiStreamSend: 
       begin
 //        FDataSock.SendStreamRaw (FDataStream);
         //we send the stream ourselves
         //so that we are capable to respond to abort operations
+        //FDataSock.MaxBandwidth := 25000; //25kb / client
         repeat
           SetLength (Buf, 1490);  //convenient ethernet packet size..
           l := FDataStream.Read (Buf[1], Length(Buf));
@@ -1459,6 +1673,8 @@ begin
               Buf := StringReplace (Buf, #10, #13#10, [rfReplaceAll]);
             end;
           FDataSock.SendString (Buf);
+          if FDataSock.LastError<>0 then
+            Terminate;
         until (Buf='') or Terminated;
       end;
     dmStreamRecv, dmAsciiStreamRecv:
@@ -1468,7 +1684,8 @@ begin
             if FDataSock.WaitingData > 0 then
               begin
                 SetLength (Buf, FDataSock.WaitingData);
-                FDataSock.RecvBuffer (@Buf[1], length (Buf));
+                l := FDataSock.RecvBuffer (@Buf[1], length (Buf));
+                SetLength (Buf, l);
                 {$IFDEF LINUX}
                 if FDataMethod = dmAsciiStreamRecv then
                   begin  //strip out all CR:
@@ -1482,6 +1699,7 @@ begin
               Terminate; //connection closed
             if FDataSock.LastError <> 0 then  //extra check (unnecessary?)
               Terminate;
+            sleep (20);
           end;
         //truncate stream if overwritten:  
         FDataStream.Size := FDataStream.Position;
@@ -1492,7 +1710,7 @@ begin
       FDataStream.Free;
     except
       //oops
-      Log ('Failed to close filestream');
+      LogError ('Failed to close filestream');
     end;
   FDataSock.Free;
   Terminate; //set terminated property so handler thread can verify

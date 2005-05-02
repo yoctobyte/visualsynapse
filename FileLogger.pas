@@ -2,7 +2,7 @@ unit FileLogger;
 
 interface
 
-uses Windows, Classes, SysUtils, SyncObjs;
+uses {$IFDEF LINUX}Types, {$ELSE}Windows, {$ENDIF}Classes, SysUtils, SyncObjs;
 
 //Object that can be easily linked to server
 //provides thread-safe method to write log lines
@@ -59,6 +59,7 @@ begin
       FLoggerThread.WaitFor;
       FLoggerThread.Free;
     end;
+  FLines.Free;
   CS.Free;
   inherited;
 end;
@@ -104,27 +105,29 @@ begin
         F := TFileStream.Create (FLogger.FFileName, fmCreate or fmShareDenyNone);
         F.Free;
       except end;
-    F := TFileStream.Create (FLogger.FFileName, fmOpenWrite or fmShareDenyNone);
-    F.Seek (0, soFromEnd);
-    while not terminated do
-      begin
-        sleep (500);
-        CS.Enter;
-        if FLines.Count > 0 then
+    try
+        F := TFileStream.Create (FLogger.FFileName, fmOpenWrite or fmShareDenyNone);
+        F.Seek (0, soFromEnd);
+        while not terminated do
           begin
-            Lines.Assign (FLines);
-            FLines.Clear;
+            sleep (500);
+            CS.Enter;
+            if FLines.Count > 0 then
+              begin
+                Lines.Assign (FLines);
+                FLines.Clear;
+              end;
+            CS.Leave;
+            if Lines.Count > 0 then
+              begin
+                v := Lines.Text;
+                if (v<>'') then
+                  F.Write (v[1], length(v));
+                Lines.Clear;
+              end;
           end;
-        CS.Leave;
-        if Lines.Count > 0 then
-          begin
-            v := Lines.Text;
-            if (v<>'') then
-              F.Write (v[1], length(v));
-            Lines.Clear;
-          end;
-      end;
-    F.Free;
+        F.Free;
+    except end;
   except end;
 end;
 
