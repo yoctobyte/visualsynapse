@@ -1,0 +1,7 @@
+Version 0.60
+* Moved to osi-approved license. The project is released under a number of licenses to allow maximum flexibility to the user.
+* Code has been more tested using the FPC (Free Pascal Compiler). It should now be compatible with modern Delphi versions (4+), any Kylix version (1+, anyone still uses kylix?) and FPC (2.0+)
+* Synapse library is not included in this package, please download it from http://synapse.ararat.cz/
+* Pastella is no longer included in the project as its status has remained alpha. Several ideas from the pastella project were used for the pwandb project http://gpu-grid.net/wiki/index.php/PWanDB This is unrelated to visualsynapse project.
+
+

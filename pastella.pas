@@ -1,4 +1,32 @@
 unit pastella;
+/////////////////////////////////////////////
+//
+//  This unit is maintained by:
+//  rene tegel rene@dubaron.com
+//
+//  Initially created by:
+//  rene@dubaron.com
+//
+//
+//  This file is released as 'Open Source' and to the 'Public Domain'
+//  As those terms have no legal status, this file is licensed under
+//  a number of OSI-approved licenses.
+//
+//  You can use this unit as long as you meet the conditions of
+//  at least one(1) of the following licenses:
+//
+//  MPL - Mozilla Public Lisence - http://www.mozilla.org/MPL/
+//  GPL - General Public License - Any version http://www.gnu.org/copyleft/gpl.html
+//  LGPL - Lesser General Public License - Any version http://www.gnu.org/copyleft/lgpl.html
+//
+//
+//  Usage of this code is entirely at own risk.
+//
+/////////////////////////////////////////////
+
+{$IFDEF FPC}
+  {$MODE DELPHI}
+{$ENDIF}
 
 //p2p class
 //idea from the 'gnutella' network,
@@ -456,6 +484,7 @@ begin
   //once connection is established, both hosts are fully equal,
   //that is: no 'server/client' relationship.
 
+  Connected := False;
   //do interaction with remote host
   if FOutGoing then
     begin
@@ -720,7 +749,6 @@ begin
 end;
 
 function TPastellaHandler.SendCmd(Cmd: TPastellaCmd): Boolean;
-var i: Integer;
 begin
   Output (@Cmd, SizeOf (TPastellaCmd));
   Result := True;
@@ -782,6 +810,7 @@ var i: Integer;
     h: THash;
 begin
   v := '';
+  Result := False;
   HashList.Lock;
   if HashList.Count = 0 then
     begin
@@ -796,6 +825,7 @@ begin
     end;
   SendCmd ('HASH', HashList.Count);
   Output (v);
+  Result := True;
   HashList.UnLock;  
 end;
 
@@ -806,12 +836,14 @@ begin
     Raise Exception.Create ('debug');
   Output (@PastellaPacket.Header, SizeOf (TPacketHeader));
   Output (PastellaPacket.Data);
+  Result := True;
 end;
 
 function TPastellaHandler.CheckAndFetch(HashList: THashList): Boolean;
 var i: Integer;
     h: THash;
 begin
+  Result := True;
   //match list against known packets
   //fetch if not known.
   OutQueue.Clear;
@@ -846,6 +878,7 @@ var i: Integer;
     pp: array of TPastellaPacket;
 begin
   //read count datapackets
+  Result := False;
   if (Count < 0) or (Count > 65530) then
     exit;
   SetLength (pp, Count);
@@ -953,9 +986,8 @@ begin
 end;
 
 function TPastellaHandler.RejectPackets(HashList: THashList): Boolean;
-var i: Integer;
-    h: THash;
 begin
+  Result := True;
   Offered.Delete (HashList, True);
 end;
 
@@ -1003,6 +1035,7 @@ end;
 function TPastella.BroadCast(Data: String): boolean;
 begin
   Send (Data, '', ptBroadCast);
+  Result := True;
 end;
 
 function TPastella.Connect(IP, Port: String): boolean;
@@ -1177,6 +1210,7 @@ begin
       Queue.IncomingClient.UnLock;
 
     end;
+  Result := True;
 end;
 
 procedure TPastella.SetOnAgentPacket(const Value: TOnPastellaPacket);
@@ -1383,7 +1417,6 @@ begin
 end;
 
 function TPacketList.GetPacket(Hash: THash): TPastellaMessage;
-var i: Integer;
 begin
   //returns message
   Lock;
@@ -1477,7 +1510,7 @@ begin
           end;
       if (i mod 900 = 0) and
          (Tried.Count>0) then //each 7 minutes
-        for i:=0 to Tried.Count div 2 do //delete first half of list
+        for l:=0 to Tried.Count div 2 do //delete first half of list
           Tried.Delete(0);
     end;
   Tried.Clear;
@@ -1538,6 +1571,7 @@ begin
 
   if DoRefCount and Assigned (PacketList) then
     PacketList.IncRef (Hash); //ignore result (?)
+  Result := True;
 end;
 
 procedure THashList.Clear(DoRefCount: Boolean=True);
@@ -1583,6 +1617,7 @@ begin
   if i>=0 then
     Delete (i, DoRefCount);
   except end;
+  Result := True;
 end;
 
 procedure THashList.CopyExclusive(HashList: THashList);
@@ -1614,6 +1649,7 @@ function THashList.RemoveOld(TimeStamp: double): Integer;
 var i: Integer;
 begin
   //delete all items older then timestamp
+    Result := Count;
   Lock;
   for i:=Count - 1 downto 0 do
     begin
@@ -1766,11 +1802,13 @@ end;
 function THashList.ForInit: Boolean;
 begin
   FForEachIndex := 0;
+  Result := True;
 end;
 
 function THashList.GetUserData(Hash: THash): Pointer;
 var i: Integer;
 begin
+  Result := nil;
   i := IndexOf (Hash);
   if i>=0 then
     Result := THashObj(FItems[i]).UserData;

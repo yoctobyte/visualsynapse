@@ -1,4 +1,32 @@
 unit visualserverbase;
+/////////////////////////////////////////////
+//
+//  This unit is maintained by:
+//  rene tegel rene@dubaron.com
+//
+//  Initially created by:
+//  rene@dubaron.com
+//
+//
+//  This file is released as 'Open Source' and to the 'Public Domain'
+//  As those terms have no legal status, this file is licensed under
+//  a number of OSI-approved licenses.
+//
+//  You can use this unit as long as you meet the conditions of
+//  at least one(1) of the following licenses:
+//
+//  MPL - Mozilla Public Lisence - http://www.mozilla.org/MPL/
+//  GPL - General Public License - Any version http://www.gnu.org/copyleft/gpl.html
+//  LGPL - Lesser General Public License - Any version http://www.gnu.org/copyleft/lgpl.html
+//
+//
+//  Usage of this code is entirely at own risk.
+//
+/////////////////////////////////////////////
+
+{$IFDEF FPC}
+  {$MODE DELPHI}
+{$ENDIF}
 
 interface
 
@@ -219,6 +247,7 @@ type
     FClientType: THandlerClass;
     FIni: TMemIniFile;
     FIniSettings: TStrings;
+    FAuthentication: TAuthentication;
     procedure Loaded; override;
     function InitIniWrite (FileName: TFileName): Boolean;
     function InitIniRead (FileName: TFileName): Boolean;
@@ -414,7 +443,8 @@ begin
   FSettings.FLogger.FileName := '';
   FSettings.FErrorLogger := TLogger.Create (Self);
   FSettings.FErrorLogger.FileName := '';
-  FSettings.FAuthentication := TAuthentication.Create (Self);
+  FAuthentication := TAuthentication.Create (Self);
+  FSettings.FAuthentication := FAuthentication;
   FSettings.FAuthentication.Method := amSystem;
   FIniSettings := TStringList.Create;
 end;
@@ -464,7 +494,7 @@ begin
   FreeAndNil (FSettings.FClients);
   FSettings.FLogger.Free;
   FSettings.FErrorLogger.Free;
-  FSettings.FAuthentication.Free;
+  FAuthentication.Free;
   FIniSettings.Free;
 end;
 
@@ -641,15 +671,15 @@ begin
       //supported:
       // https (RFC 2818)
       // FTP over TLS
-      FSock.SSLCertCAFile := FSettings.FSSLCertCAFile;
-      FSock.SSLPrivateKeyFile := FSettings.FSSLPrivateKeyFile;
-      FSock.SSLCertificateFile := FSettings.FSSLCertificateFile;
+      FSock.SSL.CertCAFile := FSettings.FSSLCertCAFile;
+      FSock.SSL.PrivateKeyFile := FSettings.FSSLPrivateKeyFile;
+      FSock.SSL.CertificateFile := FSettings.FSSLCertificateFile;
       try
 //        FSock.SSLEnabled := True;
         if not FSock.SSLAcceptConnection then
           begin
-            LogError (IntToStr (FSock.SSLLastError));
-            LogError (FSock.SSLLastErrorDesc);
+            LogError (IntToStr (FSock.SSL.LastError));
+            LogError (FSock.SSL.LastErrorDesc);
             Terminate; //signal handler to close...
           end;
       except

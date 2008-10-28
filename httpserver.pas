@@ -1,16 +1,53 @@
-unit httpserver;
+unit httpServer;
+/////////////////////////////////////////////
+//
+//  This unit is maintained by:
+//  rene tegel rene@dubaron.com
+//
+//  Initially created by:
+//  rene@dubaron.com - july 2004 by rene tegel
+//
+//
+//  This file is released as 'Open Source' and to the 'Public Domain'
+//  As those terms have no legal status, this file is licensed under
+//  a number of OSI-approved licenses.
+//
+//  You can use this unit as long as you meet the conditions of
+//  at least one(1) of the following licenses:
+//
+//  MPL - Mozilla Public Lisence - http://www.mozilla.org/MPL/
+//  GPL - General Public License - Any version http://www.gnu.org/copyleft/gpl.html
+//  LGPL - Lesser General Public License - Any version http://www.gnu.org/copyleft/lgpl.html
+//
+//
+//  Usage of this code is entirely at own risk.
+//
+/////////////////////////////////////////////
+
+{$IFDEF FPC}
+  {$MODE DELPHI}
+{$ENDIF}
+
+//rfc 2616
+//http://www.w3.org/Protocols/rfc2616/rfc2616.html
+
+// USE AT YOUR OWN RISK //
+// NOT GUARANTEED ON SECURITY ISSUES //
+// NOT SUITABLE FOR PRODUCTION ENVIRONMENTS YET //
+
+// by Rene Tegel 2004
+
+// july 2004 - busy again with the server, in need for a http server so may finish this as well :)
 
 interface
 
-uses Classes, SysUtils, typinfo, blcksock, visualserverbase, inifiles, vstypedef, ExecCGI,
-synacode, synautil, filectrl, mimemess;       
 
-// USE AT YOUR OWN RISK //
-// NOT TESTED FOR SECURITY ISSUES //
-// NOT SUITABLE FOR PRODUCTION ENVIRONMENTS YET //
 
-// License: Modified Artistic License
 
+uses Classes, SysUtils, typinfo,
+     {$IFNDEF FPC}{$IFNDEF LINUX}filectrl, {$ENDIF}{$ENDIF}
+     blcksock, visualserverbase, inifiles, vstypedef, ExecCGI,
+synacode, synautil, mimemess, authentication;
 
 
 //implementation of a HTTP server.
@@ -20,19 +57,16 @@ synacode, synautil, filectrl, mimemess;
 //is threated as 1.0 again.
 //Response codes are HTTP/1.1. Server always responds 1.1
 
-//Safety of CGI at your own risk.
 
 
-//This unit uses dynamic arrays.. which makes data copying between component and thread some easier.
+const
+  MAX_POST_DATA_SIZE=8192;
 
-//blog
-//busy again
-//july 2004 - busy again with the server, in need for a http server so may finish this as well :)
-
-//see rfc 2616
-//http://www.w3.org/Protocols/rfc2616/rfc2616.html
-
-const MAX_POST_DATA_SIZE=8192;
+{$IFDEF LINUX}
+  PathDelim = '/';
+{$ELSE}
+  PathDelim = '\';
+{$ENDIF}
 
 type
 
@@ -80,6 +114,7 @@ type
   THTTPVars = record
     FDoVirtualHosts:Boolean;
     FDomain:TvsVirtualDomain;
+    FVirtualDomainRoot: String;
     FPHPPath:TFileName;
     FCaseSensitive:Boolean;
     FServerName:String;
@@ -143,8 +178,8 @@ type
     procedure ClearSettings;
 //    procedure WriteSettings (Stream: TStream);
 //    procedure ReadSettings (Stream: TStream);
-    procedure SaveSettings (FileName: TFileName);
-    procedure LoadSettings (FileName: TFileName);
+    function SaveSettings (FileName: TFileName): Boolean; override;
+    function LoadSettings (FileName: TFileName): Boolean; override;
   published
     property OnHead: TOnRequest read FCallBack.FOnHead write FCallBack.FOnHead;
     property OnGet: TOnRequest read FCallBack.FOnGet write FCallBack.FOnGet;
@@ -159,6 +194,7 @@ type
     property SupportedProtocols:THTTPProtocols read FHTTPVars.FSupported write FHTTPVars.FSupported;
     property AutomatedProtocols:THTTPProtocols read FHTTPVars.FAutomated write FHTTPVars.FAutomated;
     property ErrorDocs: String read FHTTPVars.FErrorDocs write FHTTPVars.FErrorDocs;
+    property VirtualDomainRoot: String read FHTTPVars.FVirtualDomainRoot write FHTTPVars.FVirtualDomainRoot;
   end;
 
   //the protocol handler
@@ -311,7 +347,7 @@ begin
   v := 'Index of //'+HostName+VirtualDir;
   Result := '<html><head><title>'+v+'</title></head>'+
             '<body><h2><i>'+v+'</i></h2><br>'#13#10'<table>'#13#10;
-  f := FindFirst (PhysicalDir+'\*.*', faAnyFile, sr);
+  f := FindFirst (PhysicalDir+PathDelim+'*.*', faAnyFile - faHidden, sr);
   while f = 0 do
     begin
       w := sr.Name;
@@ -348,6 +384,7 @@ begin
   VD := TvsVirtualDomain.Create;
   VD.FHostName := '*';
   FHTTPVars.FVirtualDomains.Add (VD);
+  FHTTPVars.FVirtualDomainRoot := '';
 end;
 
 constructor TvsHTTPServer.Create(AOwner: TComponent);
@@ -373,11 +410,33 @@ begin
   Domain := TvsHTTPServer.ParseDomain(Domain);
   Result := nil;
   for i:=0 to FHTTPVars.FVirtualDomains.Count - 1 do
-    if TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]).FHostName = Domain then
+    if (TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]).FHostName = Domain) or
+       (TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]).FHostName = 'www.'+Domain) then
       begin
         Result := TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]);
         break;
       end;
+  if (Result = nil) and (FHTTPVars.FVirtualDomainRoot <> '') then
+    begin
+      //dynamic virtual domain mapping
+      //parse virtual domain root
+      //if directory exists, map
+      if (pos ('/', Domain)<=0) and (pos ('\', domain)<=0) and
+         (DirectoryExists (FHTTPVars.FVirtualDomainRoot + PathSep + Domain) or
+          DirectoryExists (FHTTPVars.FVirtualDomainRoot + PathSep + 'www.'+Domain))  then
+        begin
+          //FHTTPVars.FVirtualDomains.Add ();
+          //todo: thread safety.
+          Result := TvsVirtualDomain.Create;
+          Result.FVirtualPath.AddObject ('+/', StrToObj(FHTTPVars.FVirtualDomainRoot + PathSep + Domain));
+          Result.FHostName := Domain;
+          //FHTTPVars.
+
+//          FHTTPVars.CS.Enter
+          FHTTPVars.FVirtualDomains.Add (Result);
+//          FHTTPVars.CS.Leave;
+        end;
+    end;
   {
   if (not Assigned (Result)) and CreateIfNotExists then
     begin //add one
@@ -484,36 +543,221 @@ begin
   VD.FPreParser.AddObject (Extension, PreParser);
 end;
 
-procedure TvsHTTPServer.LoadSettings(FileName: TFileName);
-var FI: TIniFile;
+function TvsHTTPServer.LoadSettings(FileName: TFileName): Boolean;
+var //FI: TIniFile;
+    sec, nv: TStrings;
+    i,j: Integer;
+    d,p,
+    n,v,
+    f   : String;
+    r: Boolean;
+    pe,pp: String;
+
 begin
-  if ExtractFilePath (FileName)='' then
-    FileName := ExpandFileName (FileName);
-  FI := TIniFile.Create (FileName);
-  ClearSettings;
+
+  Result := InitIniRead (FileName);
+
+  if not Result then
+    exit;
+  FHTTPVars.FVirtualDomainRoot := FIni.ReadString ('global', 'virtualdomainroot', '');
+//  if not Inherited LoadSettings (FileName) then
+//    exit;
+  sec := TStringList.Create;
+  nv := TStringList.Create;
+  FIni.ReadSections (sec);
+  for j := 0 to sec.Count - 1 do
+    if pos (':', sec[j])>0 then
+      begin
+        d := copy (sec[j],1, pos(':', sec[j])-1);
+        p := lowercase (copy (sec[j], length(d)+2, maxint));
+        if (p<>'') then
+          begin
+            nv.Clear;
+            FIni.ReadSectionValues(sec[j], nv);
+            for i:=0 to nv.count - 1 do
+              begin
+                n := nv.Names[i];
+                v := nv.Values[nv.Names[i]];
+                if(n<>'') and (n[1]<>'#') then //allow comments in ini file
+                  begin
+                    r := true;
+                    if n<>'' then
+                      begin
+                        if n[1] in ['-', '+'] then
+                          begin
+                            r := n[1]='+';
+                            f := copy (n,2,maxint);
+                          end
+                        else
+                          f:=n;
+                      end
+                    else
+                      f:='';
+                    if pos ('|', v)>0 then
+                      begin
+                        pe := copy (v,1,pos('|',v)-1);
+                        pp := copy (v, length(pe)+2, maxint);
+                      end
+                    else
+                      begin
+                        pe := v;
+                        pp := '';
+                      end;
+                    //d-domain
+                    //p-param/command
+                    //n-'name'/key
+                    //v-value
+                    //f-filename
+                    //r-recursive
+                    if p='pathmapping' then
+                      RegisterDir (v,f,d,r)
+                    else
+                    if p='cgi' then
+                      RegisterCGI (v,f,d)
+                    else
+                    if p='preparser' then
+                      RegisterPreParser (pe, n, d, pp)
+                    else
+                    if p='manualurl' then
+                      RegisterManualURL (n, d)
+                    else
+                    if p='authenticationneeded' then
+                      RegisterAuthenticationDir (f, d, r)
+                    else
+                    if p='defaultdocuments' then
+                      RegisterDefaultDoc (n, d)
+                    else
+                    if p='mimetypes' then
+                      RegisterMimeType (n, v, d)
+                    ;
+                  end;
+              end;
+          end;
+
+      end;
+  FinishIni;
 end;
 
-procedure TvsHTTPServer.SaveSettings(FileName: TFileName);
-var FI: TIniFile;
-    i: Integer;
+function TvsHTTPServer.SaveSettings(FileName: TFileName): Boolean;
+var i: Integer;
     VD: TvsVirtualDomain;
+    h, hc: String;
+    sl: TStrings;
+
+  procedure StrObjToNameValue (so, nv: TStrings; Reverse: Boolean=False);
+  var i,n: Integer;
+      v: String;
+  begin
+    nv.Clear;
+    n := 0;
+    for i:=0 to so.Count-1 do
+      begin
+        v := '';
+        if so.Objects[i] is TString then
+          v := TString(so.Objects[i]).Value
+        else
+        if so.Objects[i] is TPreParser then
+          v := TPreParser(so.Objects[i]).ExePath+'|'+
+               TPreParser(so.Objects[i]).Params;
+        if Reverse then
+          begin
+            if so[i]='' then
+              so[i] := '=';
+            if v='' then
+              begin
+                inc (n);
+                v := 'n'+IntToStr(n); //Add a default name to this value.
+              end;
+            v := v+'='+so[i];
+          end
+        else
+          if so[i]<>'' then
+            begin
+              if v='' then
+                v := '='; //add a default value '=' to name with no value
+              v := so[i]+'='+v;
+            end;
+        if v<>'' then
+          nv.Add (v);
+      end;
+    if n<>0 then
+      nv.Add ('N='+IntToStr(n));
+  end;
+
+
 begin
-  //we want fully qualified path:
-  if ExtractFilePath (FileName)='' then
-    FileName := ExpandFileName (FileName);
+  if not InitIniWrite (FileName) then
+    exit;
 
-  //create backup of filename
-  i := 1;
-  while (fileexists (Filename+'.'+IntToStr(i))) and (i < 10000) do
-    inc (i);
-  RenameFile (FileName, FileName+'.'+IntToStr(i));
+  FIni.WriteString ('global', 'virtualdomainroot', FHTTPVars.FVirtualDomainRoot);
 
-  //Write settings:
-  FI := TIniFile.Create (FileName);
+//  if not inherited SaveSettings (FileName) then
+//    exit;
+  sl := TStringList.Create;
+//  FI.WriteString ('ssl',..);
   for i := 0 to FHTTPVars.FVirtualDomains.Count - 1 do
     begin
+      //h contains section id
+      vd := TvsVirtualDomain (FHTTPVars.FVirtualDomains[i]);
+      h := vd.FHostName + ':';
+      //Save help info
+      if vd.FHostName = '*' then
+        begin
+          sl.Text := '#0= [+|-]/virtual_dir/=d:\physicaldir'#10+
+                     '#1= The plus or minus determinate if the directory is'#10+
+                     '#2= mapped recursively. + = recursive on, - = off';
+          WriteSectionValues (h+'PathMapping', sl);
+          sl.Text := '#0= CGI directory, containing executable files.'#10+
+                     '#1= those files will be executed'#10+
+                     '#2= Directory listing of cgi directories is not allowed'#10+
+                     '#3= Take extreme care with cgi directories (do not map against a ftp account)'#10+
+                     '#4= Currently cgi are executed within the servers process space.';
+          WriteSectionValues (h+'CGI', sl);
+          sl.Text := '#0= Preparsers, like php and perl are defined here'#10+
+                     '#1= The executable is seperated from it''s parameters'#10+
+                     '#2= by a pipe character | (vertical line). This character is mandatory'#10+
+                     '#3= on the command line you can fill in %s to denote the path to the file'#10+
+                     '#4= to the file to be preparsed (absolute physical path)';
+          WriteSectionValues (h+'PreParser', sl);
+          sl.Text := '#0= Manual url''s are implemented by a custom-made webserver';
+          WriteSectionValues (h+'ManualURL', sl);
+          sl.Text := '#0= A list of virtual directories for which authentication is needed.'#10+
+                     '#1= Make sure to put some characters (or comment) after the equal sign (=)';
+          WriteSectionValues (h+'AuthenticationNeeded', sl);
+          sl.Text := '#0= A list of default documents. If exist, client will get redirected'#10+
+                     '#1= to this document. If default document is not found, the contents of'#10+
+                     '#2= the directory are listed.'#10+
+                     '#3= Make sure to put some characters (or comment) after the equal sign (=)';
+          WriteSectionValues (h+'DefaultDocuments', sl);
+          sl.Text := '#0= Define addition mime types here, like: ext=mime/type';
+          WriteSectionValues (h+'MimeType', sl);
+        end;
+
       //save settings...
+      StrObjToNameValue (vd.FVirtualPath, sl);
+      if sl.Count > 0 then
+        WriteSectionValues (h+'PathMapping', sl);
+      StrObjToNameValue (vd.FCGI, sl);
+      if sl.Count > 0 then
+        WriteSectionValues (h+'CGI', sl);
+      StrObjToNameValue (vd.FPreParser, sl);
+      if sl.Count > 0 then
+        WriteSectionValues (h+'PreParser', sl);
+      StrObjToNameValue (vd.FManualURL, sl);
+      if sl.Count > 0 then
+        WriteSectionValues (h+'ManualURL', sl);
+      StrObjToNameValue (vd.FAuthNeeded, sl);
+      if sl.Count > 0 then
+        WriteSectionValues (h+'AuthenticationNeeded', sl);
+      StrObjToNameValue (vd.FDefaultDocuments, sl);
+      if sl.Count > 0 then
+        WriteSectionValues (h+'DefaultDocuments', sl);
+      StrObjToNameValue (vd.FMimeTypes, sl);
+      if sl.Count > 0 then
+        WriteSectionValues (h+'MimeType', sl);
     end;
+  sl.Free;
+  FinishIni;
 end;
 
 
@@ -749,6 +993,14 @@ begin
 
                 if (FResponse.ResponseCode <> 0) then
                   begin //We send data ourselves:
+                    Log (Format ('%d %s %s %s',
+                         [FResponse.ResponseCode,
+                          FRequest.Command,
+                          FRequest.Parameter,
+                          FRequest.Domain,
+                          FRequest.FileName
+                         ]));
+
                     MakeResponseHeaders;
                     FResponse.FixHeader;
                     FSock.SendString ('HTTP/1.1 '+
@@ -758,6 +1010,11 @@ begin
                       FSock.SendString (FResponse.Data);
 //                    if Assigned (FResponse.DataStream) then
 //                      FSock.SendStream (FResponse.DataStream);
+                  end
+                else
+                  begin
+                    LogError ('Internal error');
+                    FMode := cmClose;
                   end;
                 if FResponse.ResponseCode >= 500 then //disconnect
                   FMode := cmClose;
@@ -799,6 +1056,7 @@ begin
         cmConnect:
           begin
             //Play proxy
+            Log ('PROXY_MODE');
             while Assigned (FSock) and Assigned (FPSock) and
                   (FSock.LastError=0) and (FPSock.LastError = 0) and
                   not Terminated do
@@ -1173,7 +1431,7 @@ function TvsHTTPHandler.MapVirtualDir(URL, Domain: String): TFileName;
 var Path: String;
     VD: TvsVirtualDomain;
     i: Integer;
-    vp: String;
+    vp,pp: String;
     recursive: Boolean;
     pathplus: String;
 //if dirmapping starts with '+' recursive mapping is true
@@ -1186,6 +1444,9 @@ begin
       for i:=0 to VD.FVirtualPath.Count - 1 do
         begin
           vp := VD.FVirtualPath[i];
+          pp := TString(VD.FVirtualPath.Objects[i]).Value;
+          if pp='' then
+            exit;
           recursive := false;
           if vp<>'' then
             begin
@@ -1203,9 +1464,10 @@ begin
             end
           else
             begin
-              if (copy (path, 1, length(vp))=vp) and //case sensitive
-                 ( (length (path) = length (vp)) or //exact match
-                   (copy (path, length (vp), 1) = '/') //virtual part is substring of path and full dirname matches
+              if ( (copy (path, 1, length(vp))=vp) and //case sensitive
+                   ( (length (path) = length (vp)) or //exact match
+                     (copy (path, length (vp), 1) = '/')  //virtual part is substring of path and full dirname matches
+                   )
                  ) then
                 begin
                   //strip the part that is not the virtual path:
@@ -1226,7 +1488,19 @@ begin
                     break
                   else
                     Result := ''; //continue searching virtual domains.
+                end
+              else
+                begin
+                  if (url+'/' = vp) and //url is a directory that is virtual mapped and needs redirect
+                     DirectoryExists (pp) then //mapped virtual directory exists
+                    begin
+                      Result := TString(VD.FVirtualPath.Objects[i]).Value;
+                      break;
+                    end
+                  else
+                    Result := '';
                 end;
+
             end;
         end;
     end;
@@ -1552,7 +1826,7 @@ begin
                if DefDoc<>'' then
                  begin //generate redirect
 //                   GetFileName := DefDoc
-                   FResponse.ResponseCode := 301; //Redirect
+                   FResponse.ResponseCode := 307; //Redirect
                    FResponse.Header.Values['Location'] := MergeURL (FRequest.Parameter, DefDoc);
                    exit;
                  end
