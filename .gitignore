@@ -1,0 +1,11 @@
+# Build artifacts
+*.ppu
+*.o
+*.a
+*.exe
+*.dcu
+*.compiled
+lib/*.dll
+backup/
+*.bak
+*.~*
