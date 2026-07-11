@@ -30,12 +30,8 @@ unit visualserverbase;
 
 interface
 
-{$IFDEF FPC}
-  {$MODE DELPHI}
-{$ENDIF}
-
 uses {$IFDEF LINUX}Types, {$ELSE}Windows, {$ENDIF}classes, sysutils, syncobjs,
-     blcksock, synautil,
+     blcksock, synautil, synaip,
      vstypedef, filelogger, authentication,
      IniFiles, typinfo;
 

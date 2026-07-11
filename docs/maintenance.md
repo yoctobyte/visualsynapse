@@ -80,3 +80,42 @@ pipes) rather than porting them first.
    leave historical.
 
 *No code changed in this entry — discovery only.*
+
+---
+
+## 2026-07-11 — pastella compiles on Linux/POSIX (north-star milestone)
+
+Goal: get `TPastella` (and its dependency chain) building under FPC 3.2.2 on
+Linux, so its runtime behaviour can actually be observed before any fix-vs-rewrite
+decision. **Achieved — `pastella.pas` compiles, exit 0** (deprecation warnings
+only). Changes, each small and reversible:
+
+- **`FileLogger.pas` → `filelogger.pas`** — Linux is case-sensitive; `uses
+  filelogger` could not find the mixed-case file. Lowercased the source name.
+- **Duplicate/stray `{$MODE DELPHI}` after `interface`** removed in
+  `visualserverbase.pas`, `authentication.pas`, `ExecCGI.pas` — FPC 3.2.2 rejects
+  a mode switch after `interface` (older FPC tolerated the duplicate). The correct
+  pre-`interface` directive is kept.
+- **`visualserverbase.pas`: added `synaip` to `uses`** — `IsIP` moved from
+  `synautil` to `synaip` in modern Ararat Synapse (API drift).
+- **`pastella.pas`: dropped the hard `Windows` dependency** — `uses Windows` →
+  `{$IFDEF MSWINDOWS}Windows,{$ENDIF}`, plus a non-Windows `GetTickCount` shim
+  over `SysUtils.GetTickCount64`. `Sleep` and `TCriticalSection` were already
+  cross-platform (SysUtils / syncobjs). This confirms the assessment: pastella's
+  Windows coupling was shallow.
+
+Compiles clean chain: `vstypedef` → `filelogger`/`authentication` →
+`visualserverbase` → `pastella` (against Ararat Synapse on the unit path).
+
+### Follow-ups noted (non-blocking, modernization)
+- `TThread.Resume` is deprecated → use `Start` (pastella, visualserverbase,
+  filelogger).
+- `DecimalSeparator` (global) deprecated → `FormatSettings.DecimalSeparator`
+  (pastella `CreateHash`, line ~2045).
+- `authentication.pas(207)`: "Function result does not seem to be set" — a real
+  latent bug (possible garbage return); investigate.
+- Synapse-internal deprecations (`HostToNet`/`TimeSeparator`/…) are upstream, not
+  ours.
+
+**No behaviour changed** — this is a compile-enablement port. Runtime observation
+(and the fix-vs-rewrite decision) comes next.

@@ -30,9 +30,6 @@ unit ExecCGI;
 
 interface
 
-{$IFDEF FPC}
-  {$MODE DELPHI}
-{$ENDIF}
 
 uses {$IFDEF LINUX}Types, {$ELSE}Windows, {$ENDIF}
      Classes, SysUtils, BlckSock, vstypedef, visualserverbase;

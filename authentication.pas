@@ -33,7 +33,6 @@ unit authentication;
 interface
 
 {$IFDEF FPC}
-  {$MODE DELPHI}
   {$IFDEF WIN32}
     {$DEFINE WINDOWS}
   {$ELSE}

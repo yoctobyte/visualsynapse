@@ -49,7 +49,7 @@ unit pastella;
 
 interface
 
-uses Windows, Classes, SysUtils, blcksock, syncobjs,
+uses {$IFDEF MSWINDOWS}Windows,{$ENDIF} Classes, SysUtils, blcksock, syncobjs,
      visualserverbase, synacode, synautil;
 
 
@@ -400,6 +400,15 @@ type
   end;
 
 implementation
+
+{$IFNDEF MSWINDOWS}
+// Linux/POSIX: provide the one Win32 call pastella used. Sleep is already
+// cross-platform via SysUtils. (2026 port — see docs/maintenance.md)
+function GetTickCount: DWord;
+begin
+  Result := DWord(SysUtils.GetTickCount64);
+end;
+{$ENDIF}
 
 var PasVersion: TPastellaVersion =
       ( reserved1: 0;
